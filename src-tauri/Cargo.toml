@@ -1,0 +1,93 @@
+[package]
+name = "bunnylink"
+version = "0.1.0"
+description = "BunnyLink remote connection manager"
+authors = ["BunnyCloud.IT"]
+license = "GPL-3.0-or-later OR LicenseRef-BunnyCloud-Commercial"
+publish = false
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "bunnylink_lib"
+# Desktop only; add "staticlib" and "cdylib" back if mobile targets are ever built.
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+russh = { version = "0.64.1", default-features = false, features = ["flate2", "ring", "rsa"] }
+tokio = { version = "1.53.2", features = ["full"] }
+uuid = { version = "1.27.0", features = ["v4", "serde"] }
+argon2 = "0.6.0"
+chacha20poly1305 = "0.11.0"
+getrandom = "0.3"
+anyhow = "1.0.104"
+thiserror = "2.0.21"
+tauri-plugin-clipboard-manager = "2.4.1"
+russh-sftp = "3.0.1"
+tauri-plugin-dialog = "2.8.1"
+ironrdp = { version = "0.13", features = ["connector", "session", "graphics", "input", "pdu", "dvc", "displaycontrol", "svc"] }
+ironrdp-tokio = "0.7"
+# sspi 0.16 (used by IronRDP 0.13) only builds against this picky release.
+picky = { version = "=7.0.0-rc.17", default-features = false }
+ironrdp-tls = { version = "0.2.2", features = ["rustls"] }
+sha2 = "0.11.0"
+vnc-rs = "0.6.0"
+suppaftp = { version = "12.1.1", features = ["tokio-rustls-ring"] }
+serialport = { version = "4.10.1", default-features = false }
+# smb 0.10.2 shares sspi 0.16 with IronRDP 0.13; its sub-crates must match exactly.
+smb = "=0.10.2"
+smb-dtyp = "=0.10.2"
+smb-fscc = "=0.10.2"
+smb-msg = "=0.10.2"
+smb-rpc = "=0.10.2"
+smb-transport = "=0.10.2"
+futures-util = "0.3"
+# Importers (mRemoteNG password decryption, XML)
+quick-xml = "0.38"
+base64 = "0.22"
+aes-gcm = "0.10"
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+pbkdf2 = { version = "0.12", features = ["hmac"] }
+sha1 = "0.10"
+md-5 = "0.10"
+async-trait = "0.1"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+# Self-update: HTTPS client, package signature check and unpacking
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json", "stream"] }
+ed25519-dalek = "2"
+semver = "1"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
+
+# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true
+
+[profile.dev]
+# Full debug info for every dependency makes dev builds tens of GB.
+debug = "line-tables-only"
+
+# Optimise dependencies in dev builds too: RDP decoding and crypto are unusably slow without it.
+[profile.dev.package."*"]
+opt-level = 3

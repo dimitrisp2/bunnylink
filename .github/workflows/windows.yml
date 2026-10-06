@@ -1,0 +1,91 @@
+name: Windows build
+
+on:
+  push:
+    tags: ["v*"]
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    # The update server URL, release keys and API token live only in this environment,
+    # which accepts v* tags only.
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag matches the app version
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          app=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          if [ "$version" != "$app" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match version $app in src-tauri/tauri.conf.json."
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Check frontend
+        run: npm run check
+
+      - name: Build
+        run: npx tauri build
+        env:
+          # Compiled into the official build; builds without them have no updater.
+          BUNNYLINK_UPDATE_URL: ${{ secrets.UPDATE_SERVER_URL }}
+          BUNNYLINK_UPDATE_KEY: ${{ secrets.UPDATE_PUBLIC_KEY }}
+
+      - name: Package for the update server
+        shell: pwsh
+        run: Compress-Archive -Path src-tauri/target/release/bunnylink.exe -DestinationPath "bunnylink-$env:VERSION.zip"
+
+      - name: Release notes from the tag message
+        shell: bash
+        run: |
+          # actions/checkout doesn't keep annotated tag objects; fetch the tag itself.
+          git fetch --force origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+          git for-each-ref "refs/tags/$GITHUB_REF_NAME" --format='%(contents)' > changelog.md
+          [ -s changelog.md ] || echo "BunnyLink $VERSION" > changelog.md
+
+      - name: Publish to the update server
+        shell: bash
+        env:
+          UPDATE_SERVER_URL: ${{ secrets.UPDATE_SERVER_URL }}
+          UPDATE_PUBLIC_KEY: ${{ secrets.UPDATE_PUBLIC_KEY }}
+          US_SIGNING_KEY: ${{ secrets.US_SIGNING_KEY }}
+          US_TOKEN: ${{ secrets.US_TOKEN }}
+        run: node scripts/publish-update.mjs --version="$VERSION" --changelog=changelog.md "bunnylink-$VERSION.zip"
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: BunnyLink-windows-exe
+          path: src-tauri/target/release/bunnylink.exe
+          if-no-files-found: error
+
+      - name: Attach to release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          body_path: changelog.md
+          files: src-tauri/target/release/bunnylink.exe
