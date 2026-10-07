@@ -47,7 +47,7 @@ export const app = $state({
   menu: null as ContextMenu | null,
   /** Set while asking whether to quit with active connections: what would be closed. */
   quitConfirm: null as string | null,
-  update: { current: "", status: { state: "unavailable" } } as UpdateInfo,
+  update: { current: "", currentChangelog: "", status: { state: "unavailable" } } as UpdateInfo,
   /** Connections waiting for a key passphrase; the first one is shown. */
   passphrasePrompts: [] as PassphraseRequest[],
   toasts: [] as Toast[],
@@ -421,10 +421,17 @@ export async function forgetHostKey(h: Host) {
 /** Host keys only exist for SSH-based connections. */
 export const hasHostKey = (h: Host) => hasProtocol(h, "ssh", "sftp");
 
+/** Opens the editor on an unsaved copy of the host; it is created when saved. */
+export function duplicateHost(h: Host) {
+  const copy: Host = { ...$state.snapshot(h), id: "", name: `${h.name} (copy)`, lastUsed: null };
+  app.modal = { kind: "host", host: copy };
+}
+
 export function hostMenu(e: MouseEvent, h: Host) {
   const proto = (p?: Protocol) => (p ? ` (${PROTOCOLS.find((x) => x.id === p)?.label ?? p})` : "");
   openMenu(e, [
     { label: "Edit", run: () => (app.modal = { kind: "host", host: h }) },
+    { label: "Duplicate", run: () => duplicateHost(h) },
     "separator",
     ...hostActions(h).map((a): MenuItem => ({ label: a.label + proto(a.protocol), run: a.run, disabled: !a.ready })),
     "separator",
@@ -470,6 +477,41 @@ export async function toggleTunnel(t: Tunnel) {
       toast(errorText(e), "error");
     }
   }
+}
+
+export function deleteTunnel(t: Tunnel) {
+  app.modal = {
+    kind: "confirm", title: `Delete tunnel ${t.name}?`, body: "The tunnel is closed if it is open.", confirm: "Delete tunnel",
+    run: async () => { await attempt(() => api.deleteTunnel(t.id)); await reload(); },
+  };
+}
+
+export function tunnelMenu(e: MouseEvent, t: Tunnel) {
+  openMenu(e, [
+    { label: "Edit", run: () => (app.modal = { kind: "tunnel", tunnel: t }) },
+    "separator",
+    { label: "Delete", run: () => deleteTunnel(t), danger: true },
+  ]);
+}
+
+// ------------------------------------------------------------------ credentials
+
+export function deleteCredential(c: Credential) {
+  app.modal = {
+    kind: "confirm",
+    title: `Delete credential ${c.name}?`,
+    body: "Hosts and folders using it will have no credential until you pick another.",
+    confirm: "Delete credential",
+    run: async () => { await attempt(() => api.deleteCredential(c.id)); await reload(); },
+  };
+}
+
+export function credentialMenu(e: MouseEvent, c: Credential) {
+  openMenu(e, [
+    { label: "Edit", run: () => (app.modal = { kind: "credential", credential: c }) },
+    "separator",
+    { label: "Delete", run: () => deleteCredential(c), danger: true },
+  ]);
 }
 
 export function tunnelSummary(t: Tunnel): string {

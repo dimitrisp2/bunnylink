@@ -4,7 +4,7 @@
   import Modal from "./Modal.svelte";
   import { api, errorText } from "../api";
   import type { Tunnel, TunnelKind } from "../api";
-  import { app, attempt, hostById, reload, toggleTunnel, tunnelSummary } from "../state.svelte";
+  import { app, deleteTunnel, hostById, reload, toggleTunnel, tunnelSummary } from "../state.svelte";
 
   let { tunnel, hostId, targetPort }: { tunnel: Tunnel | null; hostId?: string; targetPort?: number } = $props();
 
@@ -48,13 +48,7 @@
       error = errorText(e);
     }
   }
-  function remove() {
-    const t = tunnel!;
-    app.modal = {
-      kind: "confirm", title: `Delete tunnel ${t.name}?`, body: "The tunnel is closed if it is open.", confirm: "Delete tunnel",
-      run: async () => { await attempt(() => api.deleteTunnel(t.id)); await reload(); },
-    };
-  }
+  const remove = () => deleteTunnel(tunnel!);
 </script>
 
 <Modal title={tunnel ? `Edit ${tunnel.name}` : "New tunnel"}>

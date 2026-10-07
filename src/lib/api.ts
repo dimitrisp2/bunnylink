@@ -5,7 +5,8 @@ import { invoke, Channel } from "@tauri-apps/api/core";
 export type Protocol =
   | "ssh" | "sftp" | "rdp" | "vnc" | "ftp" | "telnet" | "serial" | "http" | "https" | "smb" | "spice";
 
-export const PROTOCOLS: { id: Protocol; label: string; port: number }[] = [
+/** `soon`: not supported yet, so it is not offered for new endpoints. */
+export const PROTOCOLS: { id: Protocol; label: string; port: number; soon?: boolean }[] = [
   { id: "ssh", label: "SSH", port: 22 },
   { id: "sftp", label: "SFTP", port: 22 },
   { id: "rdp", label: "RDP", port: 3389 },
@@ -16,7 +17,7 @@ export const PROTOCOLS: { id: Protocol; label: string; port: number }[] = [
   { id: "ftp", label: "FTP", port: 21 },
   { id: "telnet", label: "Telnet", port: 23 },
   { id: "serial", label: "Serial", port: 0 },
-  { id: "spice", label: "SPICE", port: 5930 },
+  { id: "spice", label: "SPICE", port: 5930, soon: true },
 ];
 
 export interface SerialSettings { baud: number; dataBits: number; parity: "none" | "odd" | "even"; stopBits: number; flow: "none" | "software" | "hardware" }
@@ -65,7 +66,7 @@ export type UpdateStatus =
   | { state: "downloading"; version: string; done: number; total: number }
   | { state: "ready"; version: string; changelog: string }
   | { state: "error"; message: string };
-export interface UpdateInfo { current: string; status: UpdateStatus }
+export interface UpdateInfo { current: string; currentChangelog: string; status: UpdateStatus }
 export interface Settings {
   theme: Theme;
   autoLockMinutes: number;

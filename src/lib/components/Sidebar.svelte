@@ -3,9 +3,9 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
   import type { Credential, Folder, Host } from "../api";
-  import { api, PROTOCOLS } from "../api";
+  import { PROTOCOLS } from "../api";
   import {
-    app, allTags, attempt, reload, hostActions, hostMenu, toggleTunnel, tunnelSummary, showTab, HOME,
+    app, allTags, credentialMenu, deleteCredential, hostActions, hostMenu, toggleTunnel, tunnelMenu, tunnelSummary, showTab, HOME,
   } from "../state.svelte";
 
   const q = $derived(app.filter.trim().toLowerCase());
@@ -43,15 +43,6 @@
   const credentialUsage = (id: string) =>
     app.library.hosts.filter((h) => h.overrides.credentialId === id).length +
     app.library.folders.filter((f) => f.defaults.credentialId === id).length;
-  function removeCredential(c: Credential) {
-    app.modal = {
-      kind: "confirm",
-      title: `Delete credential ${c.name}?`,
-      body: "Hosts and folders using it will have no credential until you pick another.",
-      confirm: "Delete credential",
-      run: async () => { await attempt(() => api.deleteCredential(c.id)); await reload(); },
-    };
-  }
 </script>
 
 {#snippet hostRow(h: Host, depth: number)}
@@ -143,13 +134,13 @@
     </div>
     <div class="list">
       {#each app.library.credentials as c (c.id)}
-        <div class="cred">
+        <div class="cred" role="listitem" oncontextmenu={(e) => credentialMenu(e, c)}>
           <Icon name={c.kind === "password" ? "lock" : "key"} size={14} />
           <button class="tinfo" title="Edit {c.name}" onclick={() => (app.modal = { kind: "credential", credential: c })}>
             <span class="name">{c.name}</span>
             <small class="mono">{credentialKind(c)}{c.username ? ` · ${c.username}` : ""} · used by {credentialUsage(c.id)}</small>
           </button>
-          <button class="icon-btn mini" title="Delete" onclick={() => removeCredential(c)}><Icon name="trash" size={13} /></button>
+          <button class="icon-btn mini" title="Delete" onclick={() => deleteCredential(c)}><Icon name="trash" size={13} /></button>
         </div>
       {:else}
         <div class="empty">
@@ -166,7 +157,7 @@
     <div class="list">
       {#each app.library.tunnels as t (t.id)}
         {@const st = app.tunnelState[t.id]?.state ?? "closed"}
-        <div class="tunnel">
+        <div class="tunnel" role="listitem" oncontextmenu={(e) => tunnelMenu(e, t)}>
           <span class="dot" class:on={st === "open"} class:busy={st === "connecting"}></span>
           <button class="tinfo" onclick={() => (app.modal = { kind: "tunnel", tunnel: t })}>
             <span class="name">{t.name}</span>

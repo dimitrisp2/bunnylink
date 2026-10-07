@@ -60,17 +60,6 @@ jobs:
       - name: Check frontend
         run: npm run check
 
-      - name: Build
-        run: npx tauri build
-        env:
-          # Compiled into the official build; builds without them have no updater.
-          BUNNYLINK_UPDATE_URL: ${{ secrets.UPDATE_SERVER_URL }}
-          BUNNYLINK_UPDATE_KEY: ${{ secrets.UPDATE_PUBLIC_KEY }}
-
-      - name: Package for the update server
-        shell: pwsh
-        run: Compress-Archive -Path src-tauri/target/release/bunnylink.exe -DestinationPath "bunnylink-$env:VERSION.zip"
-
       - name: Release notes from the tag message
         shell: bash
         run: |
@@ -78,6 +67,19 @@ jobs:
           git fetch --force origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
           git for-each-ref "refs/tags/$GITHUB_REF_NAME" --format='%(contents)' > changelog.md
           [ -s changelog.md ] || echo "BunnyLink $VERSION" > changelog.md
+
+      - name: Build
+        run: npx tauri build
+        env:
+          # Compiled into the official build; builds without them have no updater.
+          BUNNYLINK_UPDATE_URL: ${{ secrets.UPDATE_SERVER_URL }}
+          BUNNYLINK_UPDATE_KEY: ${{ secrets.UPDATE_PUBLIC_KEY }}
+          # Shown on the Updates screen; relative to src-tauri.
+          BUNNYLINK_CHANGELOG: ../changelog.md
+
+      - name: Package for the update server
+        shell: pwsh
+        run: Compress-Archive -Path src-tauri/target/release/bunnylink.exe -DestinationPath "bunnylink-$env:VERSION.zip"
 
       - name: Publish to the update server
         shell: bash

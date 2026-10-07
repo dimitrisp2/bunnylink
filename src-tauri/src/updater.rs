@@ -39,6 +39,9 @@ pub fn available() -> bool {
     config().is_some()
 }
 
+/// This release's notes, embedded at build time; empty when the build has none.
+const CURRENT_CHANGELOG: &str = include_str!(concat!(env!("OUT_DIR"), "/changelog.md"));
+
 pub fn current_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
@@ -63,6 +66,7 @@ pub enum Status {
 #[serde(rename_all = "camelCase")]
 pub struct Info {
     pub current: &'static str,
+    pub current_changelog: &'static str,
     pub status: Status,
 }
 
@@ -115,12 +119,12 @@ fn now() -> u64 {
 
 impl Updater {
     pub fn info(&self) -> Info {
-        Info { current: current_version(), status: self.status.lock().unwrap().clone() }
+        Info { current: current_version(), current_changelog: CURRENT_CHANGELOG, status: self.status.lock().unwrap().clone() }
     }
 
     fn set(&self, app: &AppHandle, status: Status) {
         *self.status.lock().unwrap() = status.clone();
-        let _ = app.emit("update-status", Info { current: current_version(), status });
+        let _ = app.emit("update-status", Info { current: current_version(), current_changelog: CURRENT_CHANGELOG, status });
     }
 
     /// Checks the server and, when there is a newer release, downloads and verifies it.

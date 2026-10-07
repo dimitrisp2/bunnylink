@@ -34,6 +34,24 @@
     }
   });
 
+  const TEXT_TYPES = ["text", "password", "search", "email", "url", "tel", "number"];
+  /** Text inputs and textareas, where the webview's own menu and autofill would apply. */
+  function textField(t: EventTarget | null): HTMLInputElement | HTMLTextAreaElement | null {
+    if (t instanceof HTMLTextAreaElement) return t;
+    if (t instanceof HTMLInputElement && TEXT_TYPES.includes(t.type)) return t;
+    return null;
+  }
+
+  // The webview's right-click menu only shows in text fields; our own menus cover the rest.
+  function onContextMenu(e: MouseEvent) {
+    if (!textField(e.target)) e.preventDefault();
+  }
+
+  // No browser autofill suggestions in any field, including ones added later.
+  function onFocusIn(e: FocusEvent) {
+    textField(e.target)?.setAttribute("autocomplete", "off");
+  }
+
   function onKey(e: KeyboardEvent) {
     if (!app.vault.unlocked) return;
     const k = e.key.toLowerCase();
@@ -63,7 +81,8 @@
   }
 </script>
 
-<svelte:window onkeydown={onKey} />
+<svelte:window onkeydown={onKey} oncontextmenu={onContextMenu} />
+<svelte:document onfocusin={onFocusIn} />
 
 {#if bootError}
   <div class="fatal"><h1>BunnyLink could not start</h1><p>{bootError}</p></div>

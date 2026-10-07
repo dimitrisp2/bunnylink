@@ -76,7 +76,7 @@
   }
 </script>
 
-<Modal title={host ? `Edit ${host.name}` : "New host"} width={600}>
+<Modal title={host?.id ? `Edit ${host.name}` : host ? "Duplicate host" : "New host"} width={600}>
   <div class="grid">
     <!-- svelte-ignore a11y_autofocus -->
     <label class="field"><span>Name</span><input id="host-name" bind:value={draft.name} placeholder="web01" autofocus /></label>
@@ -86,7 +86,7 @@
   <div class="field">
     <span class="lbl">Protocols</span>
     <div class="protos">
-      {#each PROTOCOLS as p (p.id)}
+      {#each PROTOCOLS.filter((p) => !p.soon || has(p.id)) as p (p.id)}
         <button type="button" class="chip" class:act={has(p.id)} onclick={() => toggle(p.id)}>{p.label}</button>
       {/each}
     </div>

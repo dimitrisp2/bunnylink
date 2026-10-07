@@ -146,6 +146,10 @@
           <pre class="changelog">{update.changelog}</pre>
         {/if}
       {/if}
+      {#if app.update.currentChangelog}
+        <h2>What's new in {app.update.current}</h2>
+        <pre class="changelog">{app.update.currentChangelog}</pre>
+      {/if}
     {:else}
       <h1>Open source licenses</h1>
       <p class="muted">BunnyLink is built with these open source components.</p>
