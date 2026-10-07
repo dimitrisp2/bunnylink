@@ -1,12 +1,14 @@
 <!-- SPDX-FileCopyrightText: 2026 BunnyCloud.IT -->
 <!-- SPDX-License-Identifier: GPL-3.0-or-later OR LicenseRef-BunnyCloud-Commercial -->
 <script lang="ts">
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy, onMount, untrack } from "svelte";
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
   import { WebglAddon } from "@xterm/addon-webgl";
+  import { SearchAddon } from "@xterm/addon-search";
   import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
   import "@xterm/xterm/css/xterm.css";
+  import Icon from "./Icon.svelte";
   import { api, errorText } from "../api";
   import type { TermEvent } from "../api";
   import { app, type Tab } from "../state.svelte";
@@ -17,6 +19,10 @@
   let term: Terminal;
   let fit: FitAddon;
   let webgl: WebglAddon | undefined;
+  let search: SearchAddon;
+  let findInput = $state<HTMLInputElement>();
+  let find = $state({ open: false, text: "", caseSensitive: false, wholeWord: false, regex: false });
+  let found = $state({ index: -1, count: 0 });
   let sessionId: string | null = null;
   let observer: ResizeObserver;
   let resizeTimer: ReturnType<typeof setTimeout>;
@@ -58,6 +64,75 @@
   function redraw() {
     term.clearTextureAtlas();
     term.refresh(0, term.rows - 1);
+  }
+
+  // Search highlights; the add-on needs #rrggbb colours.
+  const MATCH = {
+    dark: { match: "#3a4a63", active: "#c9a227" },
+    light: { match: "#cdd8ea", active: "#f2c94c" },
+  };
+
+  function findOptions(incremental = false) {
+    const c = MATCH[app.shownTheme];
+    const { caseSensitive, wholeWord, regex } = find;
+    return {
+      caseSensitive, wholeWord, regex, incremental,
+      decorations: { matchBackground: c.match, matchOverviewRuler: c.match, activeMatchBackground: c.active, activeMatchColorOverviewRuler: c.active },
+    };
+  }
+
+  /** Jumps to the next (or previous) match; typing searches from the current match. */
+  function findStep(dir: 1 | -1 = 1, incremental = false) {
+    if (!find.text) {
+      search.clearDecorations();
+      found = { index: -1, count: 0 };
+      return;
+    }
+    try {
+      if (dir === 1) search.findNext(find.text, findOptions(incremental));
+      else search.findPrevious(find.text, findOptions());
+    } catch {
+      // An unfinished regex; wait for more input.
+      found = { index: -1, count: 0 };
+    }
+  }
+
+  function openFind() {
+    find.open = true;
+    const sel = term.getSelection();
+    // A one-line selection becomes the search text.
+    if (sel && !sel.includes("\n")) find.text = sel;
+    requestAnimationFrame(() => {
+      findInput?.focus();
+      findInput?.select();
+      findStep(1, true);
+    });
+  }
+
+  function closeFind() {
+    find.open = false;
+    search.clearDecorations();
+    found = { index: -1, count: 0 };
+    term.focus();
+  }
+
+  function onFindKey(e: KeyboardEvent) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeFind();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      findStep(e.shiftKey ? -1 : 1);
+    } else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "f") {
+      e.preventDefault();
+      findInput?.select();
+    }
+  }
+
+  function toggleFind(opt: "caseSensitive" | "wholeWord" | "regex") {
+    find[opt] = !find[opt];
+    findStep(1, true);
+    findInput?.focus();
   }
 
   function applyTermTheme() {
@@ -116,6 +191,9 @@
     });
     fit = new FitAddon();
     term.loadAddon(fit);
+    search = new SearchAddon();
+    term.loadAddon(search);
+    search.onDidChangeResults(({ resultIndex, resultCount }) => (found = { index: resultIndex, count: resultCount }));
     term.open(el);
     try {
       webgl = new WebglAddon();
@@ -135,6 +213,10 @@
       if (e.type !== "keydown") return true;
       const k = e.key.toLowerCase();
       if (e.ctrlKey && e.shiftKey && (k === "k" || k === "w")) return false;
+      if (e.ctrlKey && e.shiftKey && k === "f") {
+        openFind();
+        return false;
+      }
       if (e.ctrlKey && (e.key === "Tab" || e.key === "\\")) return false;
       if (e.ctrlKey && e.shiftKey && k === "c") {
         const sel = term.getSelection();
@@ -195,6 +277,8 @@
   $effect(() => {
     void app.shownTheme;
     if (term) applyTermTheme();
+    // Re-colour the highlights for the new theme.
+    untrack(() => term && find.open && findStep(1, true));
   });
 
   onDestroy(() => {
@@ -204,10 +288,45 @@
   });
 </script>
 
-<div class="term" bind:this={el}></div>
+<div class="wrap">
+  <div class="term" bind:this={el}></div>
+  {#if find.open}
+    <div class="find" role="search">
+      <Icon name="search" size={13} />
+      <input
+        bind:this={findInput}
+        bind:value={find.text}
+        oninput={() => findStep(1, true)}
+        onkeydown={onFindKey}
+        placeholder="Find"
+        aria-label="Find in terminal"
+        spellcheck="false"
+      />
+      <span class="count" class:none={find.text && !found.count}>
+        {#if !find.text}{:else if !found.count}No results{:else if found.index < 0}{found.count}+ matches{:else}{found.index + 1} of {found.count}{/if}
+      </span>
+      <button class="opt" class:act={find.caseSensitive} title="Match case" aria-pressed={find.caseSensitive} onclick={() => toggleFind("caseSensitive")}>Aa</button>
+      <button class="opt" class:act={find.wholeWord} title="Whole word" aria-pressed={find.wholeWord} onclick={() => toggleFind("wholeWord")}><u>ab</u></button>
+      <button class="opt mono" class:act={find.regex} title="Regular expression" aria-pressed={find.regex} onclick={() => toggleFind("regex")}>.*</button>
+      <button class="icon-btn mini" title="Previous (Shift+Enter)" onclick={() => findStep(-1)}><Icon name="up" size={13} /></button>
+      <button class="icon-btn mini down" title="Next (Enter)" onclick={() => findStep(1)}><Icon name="up" size={13} /></button>
+      <button class="icon-btn mini" title="Close (Esc)" onclick={closeFind}><Icon name="x" size={13} /></button>
+    </div>
+  {/if}
+</div>
 
 <style>
+  .wrap { position: relative; height: 100%; width: 100%; }
   .term { height: 100%; width: 100%; padding: 6px 0 0 8px; background: var(--term-bg); overflow: hidden; }
   .term :global(.xterm) { height: 100%; }
   .term :global(.xterm-viewport) { background: transparent !important; }
+  .find { position: absolute; top: 8px; right: 18px; display: flex; align-items: center; gap: 4px; padding: 4px 6px 4px 10px; background: var(--panel); border: 1px solid var(--line-strong); border-radius: 7px; box-shadow: var(--shadow); color: var(--muted); z-index: 5; }
+  .find input { width: 200px; padding: 3px 6px; }
+  .find .count { min-width: 64px; font-size: 11px; text-align: right; white-space: nowrap; }
+  .find .count.none { color: var(--bad); }
+  .find .opt { min-width: 24px; height: 22px; padding: 0 4px; border-radius: 4px; font-size: 11px; font-weight: 600; color: var(--muted); }
+  .find .opt:hover { background: var(--panel-2); color: var(--fg); }
+  .find .opt.act { background: var(--accent-soft); color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .find .mini { width: 22px; height: 22px; }
+  .find .down :global(svg) { transform: rotate(180deg); }
 </style>
