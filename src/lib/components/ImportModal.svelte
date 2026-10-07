@@ -5,6 +5,7 @@
   import Modal from "./Modal.svelte";
   import Icon from "./Icon.svelte";
   import { api, errorText, PROTOCOLS } from "../api";
+  import { hasSecret, readSecret, takeSecret } from "../secret";
   import type { ImportPreview, ImportSource } from "../api";
   import { app, reload, toast } from "../state.svelte";
 
@@ -16,12 +17,15 @@
 
   let source = $state<ImportSource>("mremoteng");
   let path = $state("");
-  let password = $state("");
+  // Not bound to state: read when sent (see ../secret). The password is needed for both
+  // the preview and the import, so it stays in its field until the dialog closes.
+  let passwordInput = $state<HTMLInputElement>();
   let preview = $state<ImportPreview | null>(null);
   let error = $state("");
   let busy = $state(false);
   /** Per passphrase-protected key file: save the passphrase, or ask on every connection. */
-  let keyChoice = $state<Record<string, { save: boolean; passphrase: string }>>({});
+  let keyChoice = $state<Record<string, { save: boolean }>>({});
+  const keyInputs: Record<string, HTMLInputElement> = {};
 
   const hint = $derived(sources.find((s) => s.id === source)!.hint);
   const needsFile = $derived(source === "mremoteng");
@@ -32,7 +36,7 @@
   function pick(s: ImportSource) {
     source = s;
     path = "";
-    password = "";
+    takeSecret(passwordInput);
     preview = null;
     error = "";
   }
@@ -49,7 +53,7 @@
     }
   }
 
-  const args = () => [source, path.trim() || null, password || null] as const;
+  const args = () => [source, path.trim() || null, readSecret(passwordInput) || null] as const;
 
   async function load() {
     if (needsFile && !path.trim()) return void (error = "Choose an mRemoteNG connections file.");
@@ -57,7 +61,7 @@
     busy = true;
     try {
       preview = await api.importPreview(...args());
-      keyChoice = Object.fromEntries(preview.encryptedKeys.map((k) => [k.path, { save: false, passphrase: "" }]));
+      keyChoice = Object.fromEntries(preview.encryptedKeys.map((k) => [k.path, { save: false }]));
     } catch (e) {
       preview = null;
       error = errorText(e);
@@ -67,12 +71,12 @@
   }
 
   async function run() {
-    const missing = Object.entries(keyChoice).find(([, c]) => c.save && !c.passphrase);
+    const missing = Object.entries(keyChoice).find(([p, c]) => c.save && !hasSecret(keyInputs[p]));
     if (missing) return void (error = `Enter the passphrase for ${missing[0]}, or choose to be asked when connecting.`);
     busy = true;
     error = "";
     try {
-      const keys = Object.fromEntries(Object.entries(keyChoice).map(([p, c]) => [p, c.save ? c.passphrase : null]));
+      const keys = Object.fromEntries(Object.entries(keyChoice).map(([p, c]) => [p, c.save ? readSecret(keyInputs[p]) : null]));
       const r = await api.importApply(...args(), keys);
       await reload();
       app.collapsed[r.rootFolderId] = false;
@@ -108,7 +112,7 @@
     {#if needsFile}
       <label class="field">
         <span>mRemoteNG master password</span>
-        <input id="imp-pass" type="password" bind:value={password} placeholder="Only if you set one in mRemoteNG" autocomplete="off"
+        <input id="imp-pass" type="password" bind:this={passwordInput} placeholder="Only if you set one in mRemoteNG" autocomplete="off"
           onchange={() => (preview = null)} />
       </label>
     {/if}
@@ -150,7 +154,7 @@
                 <button type="button" class:act={!c.save} onclick={() => (c.save = false)}>Ask every time</button>
               </div>
               {#if c.save}
-                <input type="password" bind:value={c.passphrase} placeholder="Passphrase, stored encrypted in the vault" autocomplete="off" />
+                <input type="password" bind:this={keyInputs[k.path]} required placeholder="Passphrase, stored encrypted in the vault" autocomplete="off" />
               {/if}
             </div>
           {/each}

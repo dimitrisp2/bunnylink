@@ -6,10 +6,12 @@
   import { api } from "../api";
   import type { PassphraseRequest } from "../api";
   import { app } from "../state.svelte";
+  import { hasSecret, takeSecret } from "../secret";
 
   let { request }: { request: PassphraseRequest } = $props();
-  let passphrase = $state("");
+  // Not bound to state: read once when sent (see ../secret).
   let input: HTMLInputElement;
+  let filled = $state(false);
 
   // `autofocus` only applies when nothing else has focus, and the button or terminal that
   // started the connection usually still does.
@@ -23,22 +25,22 @@
   }
   function submit(e: SubmitEvent) {
     e.preventDefault();
-    if (passphrase) answer(passphrase);
+    if (hasSecret(input)) answer(takeSecret(input));
   }
 </script>
 
 <Modal title="Key passphrase" width={420} onclose={() => answer(null)}>
-  <form id="passphrase-form" onsubmit={submit}>
+  <form id="passphrase-form" onsubmit={submit} novalidate>
     <p class="muted">Connecting to <b>{request.host}</b> with the key <b>{request.key}</b>.</p>
     {#if request.retry}<p class="error">Wrong passphrase, try again.</p>{/if}
     <label class="field">
       <span>Passphrase</span>
-      <input id="passphrase-input" type="password" bind:this={input} bind:value={passphrase} autocomplete="off" />
+      <input id="passphrase-input" type="password" bind:this={input} oninput={() => (filled = hasSecret(input))} required autocomplete="off" />
     </label>
   </form>
   {#snippet footer()}
     <button class="btn" onclick={() => answer(null)}>Cancel</button>
-    <button class="btn primary" type="submit" form="passphrase-form" disabled={!passphrase}>Connect</button>
+    <button class="btn primary" type="submit" form="passphrase-form" disabled={!filled}>Connect</button>
   {/snippet}
 </Modal>
 

@@ -4,9 +4,12 @@
   import { api, errorText } from "../api";
   import type { Theme } from "../api";
   import { app, afterUnlock, saveSettings } from "../state.svelte";
+  import { hasSecret, readSecret, takeSecret } from "../secret";
 
-  let password = $state("");
-  let confirm = $state("");
+  // Not bound to state: read once when sent (see ../secret).
+  let passwordInput = $state<HTMLInputElement>();
+  let confirmInput = $state<HTMLInputElement>();
+  let filled = $state(false);
   let error = $state("");
   let busy = $state(false);
   let portable = $state(false);
@@ -24,15 +27,17 @@
   async function submit(e: SubmitEvent) {
     e.preventDefault();
     error = "";
-    if (creating && password !== confirm) {
+    if (creating && readSecret(passwordInput) !== readSecret(confirmInput)) {
       error = "The passwords don't match.";
       return;
     }
+    const password = takeSecret(passwordInput);
+    takeSecret(confirmInput);
+    filled = false;
     busy = true;
     try {
       if (creating) await api.vaultCreate(password, portable);
       else await api.vaultUnlock(password);
-      password = confirm = "";
       await afterUnlock();
     } catch (err) {
       error = errorText(err);
@@ -43,7 +48,7 @@
 </script>
 
 <div class="wrap">
-  <form class="card" onsubmit={submit}>
+  <form class="card" onsubmit={submit} novalidate>
     <img class="logo" src="/logo-small.png" alt="" />
     <div class="brand">Bunny<b>Link</b></div>
     {#if creating}
@@ -58,12 +63,13 @@
     <label class="field">
       <span>Master password</span>
       <!-- svelte-ignore a11y_autofocus -->
-      <input id="vault-password" type="password" bind:value={password} autofocus autocomplete="current-password" />
+      <input id="vault-password" type="password" bind:this={passwordInput} oninput={(e) => (filled = hasSecret(e.currentTarget))}
+        required autofocus autocomplete="current-password" />
     </label>
     {#if creating}
       <label class="field">
         <span>Confirm master password</span>
-        <input id="vault-confirm" type="password" bind:value={confirm} autocomplete="new-password" />
+        <input id="vault-confirm" type="password" bind:this={confirmInput} autocomplete="new-password" />
       </label>
       {#if app.vault.firstRun}
         <div class="field">
@@ -85,7 +91,7 @@
       {/if}
     {/if}
     {#if error}<p class="error">{error}</p>{/if}
-    <button class="btn primary" type="submit" disabled={busy || !password}>
+    <button class="btn primary" type="submit" disabled={busy || !filled}>
       {busy ? "Working…" : creating ? "Create vault" : "Unlock"}
     </button>
   </form>

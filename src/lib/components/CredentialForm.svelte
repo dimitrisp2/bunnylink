@@ -4,6 +4,7 @@
   import { api, errorText } from "../api";
   import type { Credential, CredentialKind } from "../api";
   import { reload } from "../state.svelte";
+  import { readSecret, takeSecret } from "../secret";
 
   let {
     credential = null,
@@ -25,8 +26,9 @@
   let username = $state(credential?.username ?? "");
   // svelte-ignore state_referenced_locally
   let kind = $state<CredentialKind>(credential?.kind ?? "password");
-  let secret = $state("");
-  let passphrase = $state("");
+  // Not bound to state: read once when saved (see ../secret). One secret field shows at a time.
+  let secretInput = $state<HTMLInputElement | HTMLTextAreaElement>();
+  let passphraseInput = $state<HTMLInputElement>();
   // svelte-ignore state_referenced_locally
   let askPassphrase = $state(credential?.askPassphrase ?? false);
   let error = $state("");
@@ -35,24 +37,30 @@
   async function save() {
     error = "";
     busy = true;
+    let secret = kind !== "agent" ? takeSecret(secretInput) : "";
+    let passphrase = !askPassphrase ? takeSecret(passphraseInput) : "";
     try {
       const saved = await api.saveCredential(
         { id: credential?.id ?? "", name: name.trim() || "Untitled", username: username.trim() || null, kind, askPassphrase: kind === "key" && askPassphrase },
-        secret && kind !== "agent" ? secret : undefined,
-        (!askPassphrase && passphrase) || undefined,
+        secret || undefined,
+        passphrase || undefined,
       );
       await reload();
       onSaved(saved);
     } catch (e) {
       error = errorText(e);
+      // Put them back so a pasted key isn't lost to a typo elsewhere in the form.
+      if (secretInput && !readSecret(secretInput)) secretInput.value = secret;
+      if (passphraseInput && !readSecret(passphraseInput)) passphraseInput.value = passphrase;
     } finally {
+      secret = passphrase = "";
       busy = false;
     }
   }
 
   async function loadKeyFile(e: Event) {
     const file = (e.currentTarget as HTMLInputElement).files?.[0];
-    if (file) secret = await file.text();
+    if (file && secretInput) secretInput.value = await file.text();
   }
 </script>
 
@@ -71,19 +79,19 @@
   {:else if kind === "password"}
     <label class="field">
       <span>Password{credential ? " (leave empty to keep the saved one)" : ""}</span>
-      <input id="cred-secret" type="password" bind:value={secret} autocomplete="new-password" />
+      <input id="cred-secret" type="password" bind:this={secretInput} autocomplete="new-password" />
     </label>
   {:else}
     <label class="field">
       <span>Private key, OpenSSH, PEM or PuTTY (.ppk){credential ? " (leave empty to keep the saved one)" : ""}</span>
-      <textarea id="cred-key" rows="5" bind:value={secret} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
+      <textarea id="cred-key" rows="5" bind:this={secretInput} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
     </label>
     <div class="row">
       <label class="file btn">Load from file…<input id="cred-file" type="file" onchange={loadKeyFile} hidden /></label>
       {#if !askPassphrase}
         <label class="field grow">
           <span>Key passphrase{credential ? " (leave empty to keep the saved one)" : ""}</span>
-          <input id="cred-pass" type="password" bind:value={passphrase} placeholder="If the key has one" />
+          <input id="cred-pass" type="password" bind:this={passphraseInput} placeholder="If the key has one" />
         </label>
       {/if}
     </div>
