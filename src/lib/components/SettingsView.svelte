@@ -3,6 +3,7 @@
 <script lang="ts">
   import { openUrl } from "@tauri-apps/plugin-opener";
   import Icon from "./Icon.svelte";
+  import ReleaseNotes from "./ReleaseNotes.svelte";
   import { api } from "../api";
   import type { Theme } from "../api";
   import { app, attempt, restartToUpdate, saveSettings } from "../state.svelte";
@@ -142,13 +143,13 @@
           </label>
         </div>
         {#if update.state === "ready" && update.changelog}
-          <h2>Changelog</h2>
-          <pre class="changelog">{update.changelog}</pre>
+          <h2>Coming in {update.version}</h2>
+          <ReleaseNotes text={update.changelog} />
         {/if}
       {/if}
       {#if app.update.currentChangelog}
         <h2>What's new in {app.update.current}</h2>
-        <pre class="changelog">{app.update.currentChangelog}</pre>
+        <ReleaseNotes text={app.update.currentChangelog} version={app.update.current} />
       {/if}
     {:else}
       <h1>Open source licenses</h1>
@@ -224,7 +225,6 @@
   .update { display: grid; gap: 10px; max-width: 640px; }
   .update-btns { display: flex; gap: 8px; }
   .err { color: var(--bad); }
-  .changelog { margin: 0; padding: 10px; max-height: 260px; overflow: auto; white-space: pre-wrap; font: 12px var(--mono); background: var(--bg); border-radius: 6px; user-select: text; }
   .check { display: flex; gap: 8px; align-items: center; cursor: pointer; }
   .check input { accent-color: var(--accent); }
   .link { color: var(--accent); padding: 0; text-align: left; text-decoration: underline; text-underline-offset: 2px; justify-self: start; }
