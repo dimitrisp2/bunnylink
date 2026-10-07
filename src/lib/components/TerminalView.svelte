@@ -53,13 +53,17 @@
     };
   }
 
+  // The WebGL glyph atlas is shared between terminals and can go stale while this one is
+  // hidden, so rebuild it and redraw every row.
+  function redraw() {
+    term.clearTextureAtlas();
+    term.refresh(0, term.rows - 1);
+  }
+
   function applyTermTheme() {
     term.options.theme = themeFromCss();
     // The WebGL renderer caches glyphs per colour; redraw everything on the next frame.
-    requestAnimationFrame(() => {
-      term.clearTextureAtlas();
-      term.refresh(0, term.rows - 1);
-    });
+    requestAnimationFrame(redraw);
   }
 
   function onEvent(e: TermEvent) {
@@ -178,6 +182,7 @@
     if (visible && term) {
       requestAnimationFrame(() => {
         refit();
+        redraw();
         term.focus();
       });
     }

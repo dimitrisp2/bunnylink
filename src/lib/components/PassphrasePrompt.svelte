@@ -1,6 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 BunnyCloud.IT -->
 <!-- SPDX-License-Identifier: GPL-3.0-or-later OR LicenseRef-BunnyCloud-Commercial -->
 <script lang="ts">
+  import { onMount } from "svelte";
   import Modal from "./Modal.svelte";
   import { api } from "../api";
   import type { PassphraseRequest } from "../api";
@@ -8,6 +9,11 @@
 
   let { request }: { request: PassphraseRequest } = $props();
   let passphrase = $state("");
+  let input: HTMLInputElement;
+
+  // `autofocus` only applies when nothing else has focus, and the button or terminal that
+  // started the connection usually still does.
+  onMount(() => requestAnimationFrame(() => input?.focus()));
 
   function answer(value: string | null) {
     // Read the id first: removing the request from the queue unsets this prop.
@@ -27,8 +33,7 @@
     {#if request.retry}<p class="error">Wrong passphrase, try again.</p>{/if}
     <label class="field">
       <span>Passphrase</span>
-      <!-- svelte-ignore a11y_autofocus -->
-      <input id="passphrase-input" type="password" bind:value={passphrase} autofocus autocomplete="off" />
+      <input id="passphrase-input" type="password" bind:this={input} bind:value={passphrase} autocomplete="off" />
     </label>
   </form>
   {#snippet footer()}

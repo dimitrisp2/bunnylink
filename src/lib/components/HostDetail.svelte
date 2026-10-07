@@ -5,7 +5,7 @@
   import { api } from "../api";
   import type { Effective } from "../api";
   import {
-    app, credentialById, deleteHost, folderPath, forgetHostKey, hasHostKey, hostActions, hostById, hostMenu, togglePin,
+    app, credentialById, deleteHost, folderPath, forgetHostKey, hasHostKey, hostActions, hostById, hostMenu, togglePin, HOME,
   } from "../state.svelte";
 
   const host = $derived(hostById(app.selectedHostId));
@@ -21,7 +21,7 @@
 
   const recent = $derived(
     app.library.hosts
-      .filter((h) => h.lastUsed)
+      .filter((h) => h.lastUsed && h.id !== host?.id)
       .sort((a, b) => (b.lastUsed ?? 0) - (a.lastUsed ?? 0))
       .slice(0, 6),
   );
@@ -34,11 +34,49 @@
     if (s < 86400) return `${Math.round(s / 3600)} h ago`;
     return `${Math.round(s / 86400)} d ago`;
   };
+
+  const back = () => (app.selectedHostId = null);
+
+  // Esc on the Hosts tab goes back to the welcome page. This component mounts before any
+  // modal or menu, so their own Esc handlers haven't run yet and their state is still set.
+  function onKey(e: KeyboardEvent) {
+    if (e.key !== "Escape" || e.defaultPrevented || !host) return;
+    if (app.panes[app.focus] !== HOME) return;
+    if (app.modal || app.menu || app.paletteOpen || app.quitConfirm || app.passphrasePrompts.length) return;
+    if ((e.target as HTMLElement)?.closest?.("input, textarea, select, .xterm")) return;
+    back();
+  }
 </script>
+
+<svelte:window onkeydown={onKey} />
+
+{#snippet extras()}
+  {#if recent.length}
+    <h2>Recent</h2>
+    <div class="cards">
+      {#each recent as h (h.id)}
+        <button class="card" onclick={() => (app.selectedHostId = h.id)} ondblclick={() => hostActions(h).find((a) => a.ready)?.run()} oncontextmenu={(e) => hostMenu(e, h)}>
+          <b>{h.name}</b>
+          <small class="mono muted">{h.address} · {ago(h.lastUsed!)}</small>
+        </button>
+      {/each}
+    </div>
+  {/if}
+  <h2>Shortcuts</h2>
+  <dl class="keys">
+    <dt><kbd>Ctrl</kbd> <kbd>K</kbd></dt><dd>Search hosts and actions (<kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>K</kbd> inside a terminal)</dd>
+    <dt><kbd>Ctrl</kbd> <kbd>Tab</kbd></dt><dd>Next tab</dd>
+    <dt><kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>W</kbd></dt><dd>Close tab</dd>
+    <dt><kbd>Ctrl</kbd> <kbd>\</kbd></dt><dd>Split or unsplit the view</dd>
+    <dt>Double-click</dt><dd>Connect with the host's first action</dd>
+    <dt><kbd>Esc</kbd></dt><dd>Back to this page from a host</dd>
+  </dl>
+{/snippet}
 
 <div class="detail">
   {#if host}
     <header>
+      <button class="icon-btn" title="Back (Esc)" aria-label="Back" onclick={back}><Icon name="back" /></button>
       <div class="title">
         <h1>{host.name}</h1>
         <span class="mono muted">{host.address}</span>
@@ -89,29 +127,13 @@
       {#if hasHostKey(host)}<button class="btn" onclick={() => forgetHostKey(host)}>Forget host key</button>{/if}
       <button class="btn danger" onclick={() => deleteHost(host)}><Icon name="trash" size={14} /> Delete</button>
     </footer>
+
+    <div class="welcome">{@render extras()}</div>
   {:else}
     <div class="welcome">
       <h1>Where to?</h1>
       <p class="muted">Pick a host on the left, or press <kbd>Ctrl</kbd> <kbd>K</kbd> and type a host name followed by what you want to do.</p>
-      {#if recent.length}
-        <h2>Recent</h2>
-        <div class="cards">
-          {#each recent as h (h.id)}
-            <button class="card" onclick={() => (app.selectedHostId = h.id)} ondblclick={() => hostActions(h).find((a) => a.ready)?.run()} oncontextmenu={(e) => hostMenu(e, h)}>
-              <b>{h.name}</b>
-              <small class="mono muted">{h.address} · {ago(h.lastUsed!)}</small>
-            </button>
-          {/each}
-        </div>
-      {/if}
-      <h2>Shortcuts</h2>
-      <dl class="keys">
-        <dt><kbd>Ctrl</kbd> <kbd>K</kbd></dt><dd>Search hosts and actions (<kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>K</kbd> inside a terminal)</dd>
-        <dt><kbd>Ctrl</kbd> <kbd>Tab</kbd></dt><dd>Next tab</dd>
-        <dt><kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>W</kbd></dt><dd>Close tab</dd>
-        <dt><kbd>Ctrl</kbd> <kbd>\</kbd></dt><dd>Split or unsplit the view</dd>
-        <dt>Double-click</dt><dd>Connect with the host's first action</dd>
-      </dl>
+      {@render extras()}
     </div>
   {/if}
 </div>

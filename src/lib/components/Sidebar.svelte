@@ -24,8 +24,11 @@
   const countIn = (f: Folder): number =>
     hostsIn(f.id).length + children(f.id).reduce((n, c) => n + countIn(c), 0);
 
-  function select(h: Host) {
-    app.selectedHostId = h.id;
+  function select(e: MouseEvent, h: Host) {
+    // Clicking the host already on show goes back to the welcome page. Only a single click:
+    // the second click of a double-click (detail 2) keeps it selected for the connect.
+    const shown = app.panes[app.focus] === HOME;
+    app.selectedHostId = shown && e.detail === 1 && app.selectedHostId === h.id ? null : h.id;
     showTab(HOME, "left");
   }
   function primary(h: Host) {
@@ -56,7 +59,7 @@
     class="row host"
     class:sel={app.selectedHostId === h.id}
     style:padding-left="{12 + depth * 14}px"
-    onclick={() => select(h)}
+    onclick={(e) => select(e, h)}
     ondblclick={() => primary(h)}
     oncontextmenu={(e) => hostMenu(e, h)}
     title="{h.address} — double-click to connect"

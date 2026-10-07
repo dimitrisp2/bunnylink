@@ -50,6 +50,7 @@ pub enum Status {
     Unavailable,
     Idle,
     Checking,
+    #[serde(rename_all = "camelCase")]
     UpToDate { checked_at: u64 },
     #[serde(rename_all = "camelCase")]
     Downloading { version: String, done: u64, total: u64 },

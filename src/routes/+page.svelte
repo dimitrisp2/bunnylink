@@ -46,6 +46,8 @@
       cycleTab(e.shiftKey ? -1 : 1);
     } else if (e.ctrlKey && e.shiftKey && k === "w") {
       e.preventDefault();
+      // Don't let the close confirmation replace an open editor or prompt.
+      if (app.modal || app.passphrasePrompts.length) return;
       const cur = app.panes[app.focus];
       if (cur && cur !== HOME) requestCloseTab(cur);
     } else if (e.ctrlKey && e.key === "\\") {
