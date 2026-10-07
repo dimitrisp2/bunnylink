@@ -161,6 +161,9 @@ pub struct CredentialInput {
     pub secret: Option<SecretString>,
     #[serde(default)]
     pub passphrase: Option<SecretString>,
+    /// A private key file to read instead of `secret`, so the key never passes through the UI.
+    #[serde(default)]
+    pub secret_file: Option<String>,
 }
 
 /// A string that is wiped from memory when dropped. Used for every decrypted secret.

@@ -20,7 +20,7 @@ mod updater;
 mod vault;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -285,7 +285,12 @@ fn save_credential(state: State<AppState>, input: CredentialInput) -> AppResult<
     cred.ask_passphrase &= cred.kind == CredentialKind::Key;
     // A passphrase asked for on every connection is never stored.
     let passphrase = input.passphrase.filter(|p| !p.is_empty() && !cred.ask_passphrase);
-    let secret = match input.secret {
+    let from_file = match input.secret_file.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        Some(path) if cred.kind == CredentialKind::Key => Some(read_key_file(Path::new(path))?),
+        Some(_) => return Err(AppError::Invalid("Only private keys can be loaded from a file.".into())),
+        None => None,
+    };
+    let secret = match from_file.or(input.secret) {
         Some(secret) => Some(Secret { secret, passphrase }),
         None if is_new && cred.kind != CredentialKind::Agent => {
             return Err(AppError::Invalid("Enter a password or private key.".into()))
@@ -303,6 +308,24 @@ fn save_credential(state: State<AppState>, input: CredentialInput) -> AppResult<
     };
     state.store.save_credential(&cred, blob)?;
     Ok(cred)
+}
+
+/// Reads a private key file straight into a wiped buffer, rejecting what clearly isn't one.
+fn read_key_file(path: &Path) -> AppResult<SecretString> {
+    let unreadable = |e: std::io::Error| AppError::Invalid(format!("Could not read {}: {e}", path.display()));
+    if std::fs::metadata(path).map_err(unreadable)?.len() > 64 * 1024 {
+        return Err(AppError::Invalid(format!("{} is too large to be a private key.", path.display())));
+    }
+    let bytes = zeroize::Zeroizing::new(std::fs::read(path).map_err(unreadable)?);
+    let text = std::str::from_utf8(&bytes).map_err(|_| AppError::Invalid(format!("{} is not a text key file.", path.display())))?;
+    let trimmed = text.trim_start();
+    if trimmed.starts_with("ssh-") || trimmed.starts_with("ecdsa-") || trimmed.starts_with("sk-") {
+        return Err(AppError::Invalid(format!("{} is a public key. Choose the private key file (usually without .pub).", path.display())));
+    }
+    if !(text.contains("PRIVATE KEY") || trimmed.starts_with("PuTTY-User-Key-File")) {
+        return Err(AppError::Invalid(format!("{} doesn't look like a private key.", path.display())));
+    }
+    Ok(SecretString::from(text.to_owned()))
 }
 
 #[tauri::command]
@@ -1186,4 +1209,30 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running BunnyLink");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn key_files_are_checked_before_saving() {
+        let dir = std::env::temp_dir().join(format!("bunnylink-keyfile-{}", new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = |name: &str, body: &[u8]| {
+            let p = dir.join(name);
+            std::fs::write(&p, body).unwrap();
+            p
+        };
+        let pem = "-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END OPENSSH PRIVATE KEY-----\n";
+        assert_eq!(read_key_file(&file("id_ed25519", pem.as_bytes())).unwrap().as_str(), pem);
+        assert!(read_key_file(&file("key.ppk", b"PuTTY-User-Key-File-3: ssh-ed25519\n")).is_ok());
+
+        let err = |p: PathBuf| read_key_file(&p).err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(err(file("id_ed25519.pub", b"ssh-ed25519 AAAA me@pc\n")).contains("public key"));
+        assert!(err(file("notes.txt", b"hello")).contains("doesn't look like"));
+        assert!(err(file("big", &vec![b'a'; 70 * 1024])).contains("too large"));
+        assert!(err(dir.join("missing")).contains("Could not read"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

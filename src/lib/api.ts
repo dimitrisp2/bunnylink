@@ -169,8 +169,9 @@ export const api = {
   deleteFolder: (id: string) => invoke<void>("delete_folder", { id }),
   saveHost: (host: Host) => invoke<Host>("save_host", { host }),
   deleteHost: (id: string) => invoke<void>("delete_host", { id }),
-  saveCredential: (credential: Credential, secret?: string, passphrase?: string) =>
-    invoke<Credential>("save_credential", { input: { credential, secret, passphrase } }),
+  /** `secretFile`: a private key file the backend reads itself, instead of `secret`. */
+  saveCredential: (credential: Credential, secret?: string, passphrase?: string, secretFile?: string) =>
+    invoke<Credential>("save_credential", { input: { credential, secret, passphrase, secretFile } }),
   deleteCredential: (id: string) => invoke<void>("delete_credential", { id }),
   saveTunnel: (tunnel: Tunnel) => invoke<Tunnel>("save_tunnel", { tunnel }),
   deleteTunnel: (id: string) => invoke<void>("delete_tunnel", { id }),

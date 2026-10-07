@@ -1,6 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 BunnyCloud.IT -->
 <!-- SPDX-License-Identifier: GPL-3.0-or-later OR LicenseRef-BunnyCloud-Commercial -->
 <script lang="ts">
+  import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import { api, errorText } from "../api";
   import type { Credential, CredentialKind } from "../api";
   import { reload } from "../state.svelte";
@@ -29,6 +30,8 @@
   // Not bound to state: read once when saved (see ../secret). One secret field shows at a time.
   let secretInput = $state<HTMLInputElement | HTMLTextAreaElement>();
   let passphraseInput = $state<HTMLInputElement>();
+  /** A key file picked with "Load from file…": only its path is kept; the backend reads it. */
+  let keyFile = $state<string | null>(null);
   // svelte-ignore state_referenced_locally
   let askPassphrase = $state(credential?.askPassphrase ?? false);
   let error = $state("");
@@ -37,13 +40,15 @@
   async function save() {
     error = "";
     busy = true;
-    let secret = kind !== "agent" ? takeSecret(secretInput) : "";
+    const file = kind === "key" ? keyFile : null;
+    let secret = kind !== "agent" && !file ? takeSecret(secretInput) : "";
     let passphrase = !askPassphrase ? takeSecret(passphraseInput) : "";
     try {
       const saved = await api.saveCredential(
         { id: credential?.id ?? "", name: name.trim() || "Untitled", username: username.trim() || null, kind, askPassphrase: kind === "key" && askPassphrase },
         secret || undefined,
         passphrase || undefined,
+        file ?? undefined,
       );
       await reload();
       onSaved(saved);
@@ -58,10 +63,14 @@
     }
   }
 
-  async function loadKeyFile(e: Event) {
-    const file = (e.currentTarget as HTMLInputElement).files?.[0];
-    if (file && secretInput) secretInput.value = await file.text();
+  async function pickKeyFile() {
+    const chosen = await openDialog({ title: "Choose a private key file", multiple: false, directory: false });
+    if (typeof chosen === "string") {
+      keyFile = chosen;
+      error = "";
+    }
   }
+  const fileName = (p: string) => p.split(/[\\/]/).pop() ?? p;
 </script>
 
 <div class="form" class:compact>
@@ -82,12 +91,20 @@
       <input id="cred-secret" type="password" bind:this={secretInput} autocomplete="new-password" />
     </label>
   {:else}
-    <label class="field">
-      <span>Private key, OpenSSH, PEM or PuTTY (.ppk){credential ? " (leave empty to keep the saved one)" : ""}</span>
-      <textarea id="cred-key" rows="5" bind:this={secretInput} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
-    </label>
+    <div class="field">
+      <span id="cred-key-label">Private key, OpenSSH, PEM or PuTTY (.ppk){credential ? " (leave empty to keep the saved one)" : ""}</span>
+      {#if keyFile}
+        <div class="keyfile">
+          <span class="mono" title={keyFile}>{fileName(keyFile)}</span>
+          <small class="muted">Read from the file when you save; it never passes through this window.</small>
+          <button type="button" class="link" onclick={() => (keyFile = null)}>Use pasted key instead</button>
+        </div>
+      {:else}
+        <textarea id="cred-key" aria-labelledby="cred-key-label" rows="5" bind:this={secretInput} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
+      {/if}
+    </div>
     <div class="row">
-      <label class="file btn">Load from file…<input id="cred-file" type="file" onchange={loadKeyFile} hidden /></label>
+      <button type="button" class="btn" onclick={pickKeyFile}>Load from file…</button>
       {#if !askPassphrase}
         <label class="field grow">
           <span>Key passphrase{credential ? " (leave empty to keep the saved one)" : ""}</span>
@@ -118,7 +135,10 @@
   .grow { flex: 1; }
   .check { display: flex; gap: 8px; align-items: center; cursor: pointer; }
   .check input { accent-color: var(--accent); }
-  .file { cursor: pointer; }
+  .keyfile { display: grid; gap: 2px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-2); }
+  .keyfile .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .keyfile .link { justify-self: start; padding: 0; color: var(--accent); font-size: 12px; }
+  .keyfile .link:hover { text-decoration: underline; }
   .hint { margin: 0; font-size: 12px; }
   .error { margin: 0; color: var(--bad); }
   .actions { display: flex; gap: 8px; justify-content: flex-end; }
