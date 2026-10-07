@@ -1039,6 +1039,9 @@ fn open_store(app: &tauri::App) -> Result<(Store, Option<DbLocations>), Box<dyn 
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // sspi's network client turns on rustls' aws-lc-rs next to ring, so rustls can no
+    // longer pick a provider by itself.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())

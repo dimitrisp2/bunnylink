@@ -38,10 +38,11 @@ tauri-plugin-clipboard-manager = "2.4.1"
 russh-sftp = "3.0.1"
 tauri-plugin-dialog = "2.8.1"
 ironrdp = { version = "0.13", features = ["connector", "session", "graphics", "input", "pdu", "dvc", "displaycontrol", "svc"] }
-ironrdp-tokio = "0.7"
+# The reqwest network client lets NLA reach a Kerberos KDC when sspi picks Kerberos.
+ironrdp-tokio = { version = "0.7", features = ["reqwest"] }
 # sspi 0.16 (used by IronRDP 0.13) only builds against this picky release.
 picky = { version = "=7.0.0-rc.17", default-features = false }
-ironrdp-tls = { version = "0.2.2", features = ["rustls"] }
+ironrdp-tls = { version = "0.2.2", default-features = false, features = ["rustls-ring"] }
 sha2 = "0.11.0"
 vnc-rs = "0.6.0"
 suppaftp = { version = "12.1.1", features = ["tokio-rustls-ring"] }

@@ -55,6 +55,11 @@ fn err(context: &str, e: impl std::fmt::Display) -> AppError {
 /// Splits `DOMAIN\user` and `user@domain` forms.
 fn split_domain(username: &str) -> (String, Option<String>) {
     if let Some((d, u)) = username.split_once('\\') {
+        // `MicrosoftAccount\user@live.com`: sspi rejects a domain next to a UPN, and
+        // the UPN alone already names the account.
+        if u.contains('@') {
+            return (u.to_string(), None);
+        }
         (u.to_string(), Some(d.to_string()))
     } else {
         (username.to_string(), None)
@@ -159,18 +164,22 @@ async fn connect(
     let upgraded = ironrdp_tokio::mark_as_upgraded(should_upgrade, &mut connector);
     let stream: Box<dyn Stream> = Box::new(tls);
     let mut framed = TokioFramed::new_with_leftover(stream, leftover);
+    // sspi switches NLA to Kerberos when it can find a KDC for the user's domain,
+    // and Kerberos has to talk to that KDC over the network.
+    let mut network_client = ironrdp_tokio::reqwest::ReqwestNetworkClient::new();
     let result = ironrdp_tokio::connect_finalize(
         upgraded,
         &mut framed,
         connector,
         t.address.clone().into(),
         public_key,
-        None,
+        Some(&mut network_client),
         None,
     )
     .await
     .map_err(|e| {
-        let text = e.to_string();
+        // The report includes the sspi error underneath, e.g. SEC_E_LOGON_DENIED.
+        let text = e.report().to_string();
         if text.to_lowercase().contains("logon") || text.contains("CredSSP") || text.contains("SEC_E") {
             AppError::Other(format!("{} rejected the login for \"{}\". ({text})", t.label, t.username))
         } else {
