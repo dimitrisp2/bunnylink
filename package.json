@@ -1,6 +1,6 @@
 {
   "name": "bunnylink",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "BunnyLink remote connection manager",
   "type": "module",
   "scripts": {
