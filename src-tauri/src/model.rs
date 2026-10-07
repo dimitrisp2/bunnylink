@@ -163,11 +163,14 @@ pub struct CredentialInput {
     pub passphrase: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// A string that is wiped from memory when dropped. Used for every decrypted secret.
+pub type SecretString = zeroize::Zeroizing<String>;
+
+#[derive(Clone, Serialize, Deserialize, Default)]
 pub struct Secret {
-    pub secret: String,
+    pub secret: SecretString,
     #[serde(default)]
-    pub passphrase: Option<String>,
+    pub passphrase: Option<SecretString>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

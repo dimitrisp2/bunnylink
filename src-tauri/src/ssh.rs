@@ -16,15 +16,16 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 
 use crate::error::{AppError, AppResult};
+use crate::model::SecretString;
 use crate::store::Store;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Clone)]
 pub enum Auth {
-    Password(String),
+    Password(SecretString),
     /// `ask` names the key when its passphrase is asked for on every connection.
-    Key { pem: String, passphrase: Option<String>, ask: Option<String> },
+    Key { pem: SecretString, passphrase: Option<SecretString>, ask: Option<String> },
     Agent,
 }
 
@@ -334,13 +335,13 @@ fn connect_inner<'a>(
 
         let ok = match &target.auth {
             Auth::Password(pw) => {
-                timed(label, async { Ok(handle.authenticate_password(&target.username, pw).await?.success()) }).await?
+                timed(label, async { Ok(handle.authenticate_password(&target.username, pw.as_str()).await?.success()) }).await?
             }
             Auth::Agent => timed(label, agent_auth(&mut handle, &target.username, label)).await?,
             Auth::Key { pem, passphrase, ask } => {
                 let key = match ask {
                     Some(key_name) => ask_key(prompter, pem, label, key_name).await?,
-                    None => decode_secret_key(pem, passphrase.as_deref()).map_err(|e| match e {
+                    None => decode_secret_key(pem, passphrase.as_ref().map(|p| p.as_str())).map_err(|e| match e {
                         russh::keys::Error::KeyIsEncrypted => {
                             AppError::Other(format!("The key for {label} needs a passphrase. Enter it in the credential."))
                         }
@@ -639,7 +640,7 @@ mod tests {
             address: p.next()?.into(),
             port: p.next()?.parse().ok()?,
             username: p.next()?.into(),
-            auth: Auth::Password(p.next()?.into()),
+            auth: Auth::Password(p.next()?.to_string().into()),
             jump: None,
         })
     }

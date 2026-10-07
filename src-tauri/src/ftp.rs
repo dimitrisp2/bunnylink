@@ -30,7 +30,7 @@ pub struct FtpTarget {
     pub address: String,
     pub port: u16,
     pub username: Option<String>,
-    pub password: Option<String>,
+    pub password: Option<crate::model::SecretString>,
     /// SSH server to tunnel the control and data connections through.
     pub jump: Option<ssh::Target>,
 }
@@ -210,7 +210,7 @@ impl Ftp {
         };
         stream.set_passive_nat_workaround(true);
         let user = t.username.clone().unwrap_or_else(|| "anonymous".into());
-        let pass = t.password.clone().unwrap_or_else(|| "anonymous@".into());
+        let pass = t.password.clone().unwrap_or_else(|| String::from("anonymous@").into());
         stream.login(&user, &pass).await.map_err(|e| match e {
             FtpError::UnexpectedResponse(_) => AppError::Other(format!("{} rejected the login for \"{user}\".", t.label)),
             other => other.into(),
@@ -362,7 +362,7 @@ mod tests {
             address: p[0].into(),
             port: p[1].parse().unwrap(),
             username: Some(p[2].into()),
-            password: Some(p[3].into()),
+            password: Some(p[3].to_string().into()),
             jump: None,
         };
         // Through a jump host as well, when an SSH test server is configured.
@@ -373,7 +373,7 @@ mod tests {
                 address: s[0].into(),
                 port: s[1].parse().unwrap(),
                 username: s[2].into(),
-                auth: ssh::Auth::Password(s[3].into()),
+                auth: ssh::Auth::Password(s[3].to_string().into()),
                 jump: None,
             };
             let via = FtpTarget { jump: Some(jump), ..target.clone() };

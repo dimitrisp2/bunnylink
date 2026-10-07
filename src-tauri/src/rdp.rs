@@ -38,7 +38,7 @@ pub struct RdpTarget {
     pub address: String,
     pub port: u16,
     pub username: String,
-    pub password: String,
+    pub password: crate::model::SecretString,
     pub width: u16,
     pub height: u16,
     /// SSH server to tunnel the connection through.
@@ -69,7 +69,8 @@ fn split_domain(username: &str) -> (String, Option<String>) {
 fn config(t: &RdpTarget) -> connector::Config {
     let (username, domain) = split_domain(&t.username);
     connector::Config {
-        credentials: Credentials::UsernamePassword { username, password: t.password.clone() },
+        // IronRDP takes a plain String; that copy is out of our hands.
+        credentials: Credentials::UsernamePassword { username, password: t.password.to_string() },
         domain,
         enable_tls: true,
         enable_credssp: true,
@@ -370,7 +371,7 @@ mod tests {
             address: p[0].into(),
             port: p[1].parse().unwrap(),
             username: p[2].into(),
-            password: p[3].into(),
+            password: p[3].to_string().into(),
             width: 1024,
             height: 768,
             jump: None,

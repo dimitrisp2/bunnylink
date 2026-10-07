@@ -28,7 +28,7 @@ pub struct SmbTarget {
     pub port: u16,
     pub share: Option<String>,
     pub username: String,
-    pub password: String,
+    pub password: crate::model::SecretString,
     /// SSH server to tunnel the connection through.
     pub jump: Option<ssh::Target>,
 }
@@ -71,10 +71,11 @@ impl Smb {
         let me = Self { target, client, _tunnel: tunnel };
         // Connect once up front so bad credentials are reported immediately.
         let root = me.unc(me.target.share.as_deref().unwrap_or("IPC$"), "")?;
+        // The smb crate takes plain Strings; those copies are out of our hands.
         let connect = if me.target.share.is_some() {
-            me.client.share_connect(&root, &me.target.username, me.target.password.clone()).await
+            me.client.share_connect(&root, &me.target.username, me.target.password.to_string()).await
         } else {
-            me.client.ipc_connect(&me.target.address, &me.target.username, me.target.password.clone()).await
+            me.client.ipc_connect(&me.target.address, &me.target.username, me.target.password.to_string()).await
         };
         connect.map_err(|e| {
             let text = e.to_string();
@@ -107,7 +108,7 @@ impl Smb {
     async fn ensure_share(&self, share: &str) -> AppResult<()> {
         if self.target.share.as_deref() != Some(share) {
             let root = self.unc(share, "")?;
-            self.client.share_connect(&root, &self.target.username, self.target.password.clone()).await?;
+            self.client.share_connect(&root, &self.target.username, self.target.password.to_string()).await?;
         }
         Ok(())
     }
@@ -358,7 +359,7 @@ mod tests {
             port: p[1].parse().unwrap(),
             share: Some(p[2].into()),
             username: p[3].into(),
-            password: p[4].into(),
+            password: p[4].to_string().into(),
             jump: None,
         };
         let store = Arc::new(Store::in_memory().unwrap());
@@ -373,7 +374,7 @@ mod tests {
                 address: s[0].into(),
                 port: s[1].parse().unwrap(),
                 username: s[2].into(),
-                auth: ssh::Auth::Password(s[3].into()),
+                auth: ssh::Auth::Password(s[3].to_string().into()),
                 jump: None,
             };
             let mut notices = Vec::new();

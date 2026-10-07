@@ -197,13 +197,13 @@ pub fn apply(store: &Store, vault: &Vault, source: Source, plan: Plan, keys: &Ke
                     format!("pw:{user}:{pw}"),
                     if user.is_empty() { format!("{} password", source.label()) } else { format!("{user} ({})", source.label()) },
                     CredentialKind::Password,
-                    Some(Secret { secret: pw.clone(), passphrase: None }),
+                    Some(Secret { secret: pw.clone().into(), passphrase: None }),
                 )
             }
             PSecret::Key { pem, label, path, encrypted } => {
                 let passphrase = if *encrypted { keys.get(path).cloned().flatten() } else { None };
                 ask_passphrase = *encrypted && passphrase.is_none();
-                (format!("key:{pem}"), label.clone(), CredentialKind::Key, Some(Secret { secret: pem.clone(), passphrase }))
+                (format!("key:{pem}"), label.clone(), CredentialKind::Key, Some(Secret { secret: pem.clone().into(), passphrase: passphrase.map(Into::into) }))
             }
         };
         if let Some(id) = creds.get(&dedupe) {
@@ -211,7 +211,7 @@ pub fn apply(store: &Store, vault: &Vault, source: Source, plan: Plan, keys: &Ke
         }
         let c = Credential { id: new_id(), name, username: None, kind, ask_passphrase };
         let blob = match blob {
-            Some(s) => Some(vault.encrypt(&serde_json::to_vec(&s)?)?),
+            Some(s) => Some(vault.encrypt(&zeroize::Zeroizing::new(serde_json::to_vec(&s)?))?),
             None => None,
         };
         store.save_credential(&c, blob)?;

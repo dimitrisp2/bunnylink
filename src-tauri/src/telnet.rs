@@ -8,7 +8,10 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 
+use zeroize::Zeroizing;
+
 use crate::error::AppResult;
+use crate::model::SecretString;
 use crate::ssh::{self, TermEvent, TermInput};
 use crate::store::Store;
 
@@ -17,7 +20,7 @@ pub struct TelnetTarget {
     pub address: String,
     pub port: u16,
     pub username: Option<String>,
-    pub password: Option<String>,
+    pub password: Option<SecretString>,
     pub jump: Option<ssh::Target>,
 }
 
@@ -162,12 +165,13 @@ pub fn encode_input(input: &[u8]) -> Vec<u8> {
 /// Watches output for login prompts and answers each one once.
 struct AutoLogin {
     username: Option<String>,
-    password: Option<String>,
+    password: Option<SecretString>,
     tail: String,
 }
 
 impl AutoLogin {
-    fn check(&mut self, data: &[u8]) -> Option<String> {
+    /// The answer can be the password, so it is wiped once sent.
+    fn check(&mut self, data: &[u8]) -> Option<SecretString> {
         self.tail.push_str(&String::from_utf8_lossy(data).to_lowercase());
         if self.tail.len() > 256 {
             let cut = self.tail.len() - 256;
@@ -178,7 +182,7 @@ impl AutoLogin {
         let answer = if end.ends_with("password:") {
             self.password.take()
         } else if end.ends_with("login:") || end.ends_with("username:") || end.ends_with("user name:") {
-            self.username.take()
+            self.username.take().map(SecretString::from)
         } else {
             None
         };
@@ -223,7 +227,8 @@ pub async fn run(
                     }
                     if !data.is_empty() {
                         if let Some(answer) = login.check(&data) {
-                            wr.write_all(&encode_input(format!("{answer}\r").as_bytes())).await?;
+                            let line = SecretString::from(format!("{}\r", answer.as_str()));
+                            wr.write_all(&Zeroizing::new(encode_input(line.as_bytes()))).await?;
                         }
                         emit(TermEvent::Data { data });
                     }
@@ -280,11 +285,12 @@ mod tests {
 
     #[test]
     fn auto_login() {
-        let mut a = AutoLogin { username: Some("admin".into()), password: Some("pw".into()), tail: String::new() };
-        assert_eq!(a.check(b"Welcome\r\nrouter "), None);
-        assert_eq!(a.check(b"login: "), Some("admin".into()));
-        assert_eq!(a.check(b"Password: "), Some("pw".into()));
-        assert_eq!(a.check(b"login: "), None, "answered only once");
+        let mut a = AutoLogin { username: Some("admin".into()), password: Some(String::from("pw").into()), tail: String::new() };
+        let mut check = |data: &[u8]| a.check(data).map(|s| s.to_string());
+        assert_eq!(check(b"Welcome\r\nrouter "), None);
+        assert_eq!(check(b"login: ").as_deref(), Some("admin"));
+        assert_eq!(check(b"Password: ").as_deref(), Some("pw"));
+        assert_eq!(check(b"login: "), None, "answered only once");
     }
 
     /// Live test, skipped unless `BUNNYLINK_TEST_TELNET=host:port:user:password` is set.
@@ -298,7 +304,7 @@ mod tests {
             address: p[0].into(),
             port: p[1].parse().unwrap(),
             username: Some(p[2].into()),
-            password: Some(p[3].into()),
+            password: Some(p[3].to_string().into()),
             jump: None,
         };
         let (tx, rx) = mpsc::unbounded_channel();

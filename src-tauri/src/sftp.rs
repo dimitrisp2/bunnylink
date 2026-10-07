@@ -160,7 +160,7 @@ mod tests {
             address: p[0].into(),
             port: p[1].parse().unwrap(),
             username: p[2].into(),
-            auth: crate::ssh::Auth::Password(p[3].into()),
+            auth: crate::ssh::Auth::Password(p[3].to_string().into()),
             jump: None,
         };
         let store = Arc::new(crate::store::Store::in_memory().unwrap());

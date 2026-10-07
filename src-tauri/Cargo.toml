@@ -29,8 +29,10 @@ rusqlite = { version = "0.40.2", features = ["bundled"] }
 russh = { version = "0.64.1", default-features = false, features = ["flate2", "ring", "rsa"] }
 tokio = { version = "1.53.2", features = ["full"] }
 uuid = { version = "1.27.0", features = ["v4", "serde"] }
-argon2 = "0.6.0"
-chacha20poly1305 = "0.11.0"
+argon2 = { version = "0.6.0", features = ["zeroize"] }
+chacha20poly1305 = { version = "0.11.0", features = ["zeroize"] }
+# Wipes secrets from memory when they are dropped.
+zeroize = { version = "1.9", features = ["serde"] }
 getrandom = "0.3"
 anyhow = "1.0.104"
 thiserror = "2.0.21"

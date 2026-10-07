@@ -282,9 +282,9 @@ fn save_credential(state: State<AppState>, input: CredentialInput) -> AppResult<
     }
     cred.ask_passphrase &= cred.kind == CredentialKind::Key;
     // A passphrase asked for on every connection is never stored.
-    let passphrase = input.passphrase.filter(|p| !p.is_empty() && !cred.ask_passphrase);
+    let passphrase = input.passphrase.filter(|p| !p.is_empty() && !cred.ask_passphrase).map(SecretString::from);
     let secret = match input.secret {
-        Some(secret) => Some(Secret { secret, passphrase }),
+        Some(secret) => Some(Secret { secret: secret.into(), passphrase }),
         None if is_new && cred.kind != CredentialKind::Agent => {
             return Err(AppError::Invalid("Enter a password or private key.".into()))
         }
@@ -296,7 +296,7 @@ fn save_credential(state: State<AppState>, input: CredentialInput) -> AppResult<
         None => None,
     };
     let blob = match secret {
-        Some(s) => Some(state.vault.encrypt(&serde_json::to_vec(&s)?)?),
+        Some(s) => Some(state.vault.encrypt(&zeroize::Zeroizing::new(serde_json::to_vec(&s)?))?),
         None => None,
     };
     state.store.save_credential(&cred, blob)?;
@@ -379,11 +379,13 @@ fn copy_credential(app: AppHandle, state: State<AppState>, host_id: String, fiel
         Some(id) => Some(state.store.credential(id)?),
         None => None,
     };
-    let text = match field.as_str() {
+    // Kept until the clipboard is cleared, then wiped.
+    let text: SecretString = match field.as_str() {
         "username" => eff
             .username
             .or(cred.and_then(|c| c.username))
-            .ok_or(AppError::Invalid(format!("{} has no username.", host.name)))?,
+            .ok_or(AppError::Invalid(format!("{} has no username.", host.name)))?
+            .into(),
         "password" => {
             let cred = cred.ok_or(AppError::Invalid(format!("{} has no credential.", host.name)))?;
             if cred.kind != CredentialKind::Password {
@@ -393,7 +395,7 @@ fn copy_credential(app: AppHandle, state: State<AppState>, host_id: String, fiel
         }
         _ => return Err(AppError::Invalid("Unknown field.".into())),
     };
-    app.clipboard().write_text(text.clone()).map_err(|e| AppError::Other(e.to_string()))?;
+    app.clipboard().write_text(text.to_string()).map_err(|e| AppError::Other(e.to_string()))?;
     let seconds = state.store.settings()?.clipboard_clear_seconds;
     if seconds > 0 && field == "password" {
         tauri::async_runtime::spawn(async move {
@@ -792,7 +794,7 @@ fn desktop_open(
         Some(j) => Some(state.ssh_target(j, 1)?),
         None => None,
     };
-    let password_credential = |required: bool| -> AppResult<Option<(Credential, String)>> {
+    let password_credential = |required: bool| -> AppResult<Option<(Credential, SecretString)>> {
         let Some(cred_id) = eff.credential_id.clone() else {
             return if required {
                 Err(AppError::Invalid(format!("{} has no credential. Pick one in the host settings.", host.name)))

@@ -3,12 +3,16 @@
 //! Master-password vault. A 256-bit key is derived with Argon2id and used to encrypt
 //! each secret with XChaCha20-Poly1305. Only the salt and an encrypted check value are
 //! stored; the key exists only in memory while the vault is unlocked.
+//!
+//! The key lives in one heap allocation that is wiped on lock, and decrypted plaintext is
+//! returned as `Zeroizing`, so it is wiped as soon as the caller is done with it.
 
 use std::sync::Mutex;
 
 use argon2::{Algorithm, Argon2, Params, Version};
 use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
+use zeroize::Zeroizing;
 
 use crate::error::{AppError, AppResult};
 use crate::store::Store;
@@ -18,9 +22,12 @@ const CHECK_KEY: &str = "vault.check";
 const CHECK_PLAINTEXT: &[u8] = b"bunnylink-vault-v1";
 const NONCE_LEN: usize = 24;
 
+/// Boxed so the key never moves (a move would leave a stale copy) and is wiped on drop.
+type Key = Box<Zeroizing<[u8; 32]>>;
+
 #[derive(Default)]
 pub struct Vault {
-    key: Mutex<Option<[u8; 32]>>,
+    key: Mutex<Option<Key>>,
 }
 
 fn random<const N: usize>() -> [u8; N] {
@@ -29,12 +36,13 @@ fn random<const N: usize>() -> [u8; N] {
     buf
 }
 
-fn derive(password: &str, salt: &[u8]) -> AppResult<[u8; 32]> {
+fn derive(password: &str, salt: &[u8]) -> AppResult<Key> {
     // OWASP recommended Argon2id parameters: 19 MiB, 2 iterations, 1 lane.
     let params = Params::new(19 * 1024, 2, 1, Some(32)).map_err(|e| AppError::Other(e.to_string()))?;
-    let mut key = [0u8; 32];
+    // Derived straight into its final place; argon2's zeroize feature wipes its working memory.
+    let mut key: Key = Box::new(Zeroizing::new([0u8; 32]));
     Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
-        .hash_password_into(password.as_bytes(), salt, &mut key)
+        .hash_password_into(password.as_bytes(), salt, &mut key[..])
         .map_err(|e| AppError::Other(e.to_string()))?;
     Ok(key)
 }
@@ -51,7 +59,7 @@ fn seal(key: &[u8; 32], plaintext: &[u8]) -> AppResult<Vec<u8>> {
     Ok(out)
 }
 
-fn open(key: &[u8; 32], blob: &[u8]) -> AppResult<Vec<u8>> {
+fn open(key: &[u8; 32], blob: &[u8]) -> AppResult<Zeroizing<Vec<u8>>> {
     if blob.len() < NONCE_LEN {
         return Err(AppError::Other("Corrupt secret.".into()));
     }
@@ -59,6 +67,7 @@ fn open(key: &[u8; 32], blob: &[u8]) -> AppResult<Vec<u8>> {
     let nonce: [u8; NONCE_LEN] = nonce.try_into().unwrap();
     XChaCha20Poly1305::new(key.into())
         .decrypt(&XNonce::from(nonce), ct)
+        .map(Zeroizing::new)
         .map_err(|_| AppError::WrongPassword)
 }
 
@@ -90,7 +99,7 @@ impl Vault {
         let salt = store.meta(SALT_KEY)?.ok_or(AppError::Invalid("No vault exists yet.".into()))?;
         let check = store.meta(CHECK_KEY)?.ok_or(AppError::Invalid("Vault is damaged.".into()))?;
         let key = derive(password, &salt)?;
-        if open(&key, &check)? != CHECK_PLAINTEXT {
+        if open(&key, &check)?.as_slice() != CHECK_PLAINTEXT {
             return Err(AppError::WrongPassword);
         }
         *self.key.lock().unwrap() = Some(key);
@@ -98,9 +107,8 @@ impl Vault {
     }
 
     pub fn lock(&self) {
-        if let Some(mut k) = self.key.lock().unwrap().take() {
-            k.fill(0);
-        }
+        // Dropping the key wipes it.
+        self.key.lock().unwrap().take();
     }
 
     pub fn encrypt(&self, plaintext: &[u8]) -> AppResult<Vec<u8>> {
@@ -108,7 +116,7 @@ impl Vault {
         seal(guard.as_ref().ok_or(AppError::VaultLocked)?, plaintext)
     }
 
-    pub fn decrypt(&self, blob: &[u8]) -> AppResult<Vec<u8>> {
+    pub fn decrypt(&self, blob: &[u8]) -> AppResult<Zeroizing<Vec<u8>>> {
         let guard = self.key.lock().unwrap();
         open(guard.as_ref().ok_or(AppError::VaultLocked)?, blob)
     }
@@ -128,6 +136,6 @@ mod tests {
         assert!(matches!(v.decrypt(&blob), Err(AppError::VaultLocked)));
         assert!(matches!(v.unlock(&store, "wrong password"), Err(AppError::WrongPassword)));
         v.unlock(&store, "correct horse").unwrap();
-        assert_eq!(v.decrypt(&blob).unwrap(), b"s3cret");
+        assert_eq!(v.decrypt(&blob).unwrap().as_slice(), b"s3cret");
     }
 }

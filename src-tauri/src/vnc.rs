@@ -20,7 +20,7 @@ pub struct VncTarget {
     pub address: String,
     pub port: u16,
     /// VNC authentication only uses a password; `None` for servers without one.
-    pub password: Option<String>,
+    pub password: Option<crate::model::SecretString>,
     pub jump: Option<ssh::Target>,
 }
 
@@ -118,7 +118,8 @@ async fn session(
     emit: &(impl Fn(Out) + Send + Sync),
 ) -> AppResult<String> {
     let (stream, _) = open_stream(&t.label, &t.address, t.port, t.jump.as_ref(), store, emit).await?;
-    let password = t.password.clone();
+    // vnc-rs takes a plain String; that copy is out of our hands.
+    let password = t.password.as_deref().cloned();
     let vnc = tokio::time::timeout(Duration::from_secs(20), async {
         VncConnector::new(stream)
             .set_auth_method(async move { password.ok_or(VncError::NoPassword) })
@@ -292,7 +293,7 @@ mod tests {
             label: "test".into(),
             address: p[0].into(),
             port: p[1].parse().unwrap(),
-            password: Some(p[2].into()),
+            password: Some(p[2].to_string().into()),
             jump: None,
         };
         let store = Arc::new(Store::in_memory().unwrap());
@@ -339,7 +340,7 @@ mod tests {
             label: "test".into(),
             address: p[0].into(),
             port: p[1].parse().unwrap(),
-            password: Some("not-it".into()),
+            password: Some(String::from("not-it").into()),
             jump: None,
         };
         let (_tx, rx) = mpsc::unbounded_channel();
