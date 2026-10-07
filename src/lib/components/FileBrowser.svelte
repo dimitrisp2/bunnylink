@@ -243,7 +243,8 @@
   onMount(async () => {
     connect();
     unlistenDrop = await getCurrentWebview().onDragDropEvent((e) => {
-      if (!visible || !sessionId) return;
+      // Drops reach every webview listener; while locked this browser may be hidden behind the lock screen.
+      if (!visible || !sessionId || !app.vault.unlocked) return;
       const p = e.payload;
       if (p.type === "leave") { dragOver = false; return; }
       const r = root.getBoundingClientRect();

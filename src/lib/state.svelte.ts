@@ -34,7 +34,7 @@ export const app = $state({
   shownTheme: "dark" as "dark" | "light",
   vault: { initialized: false, unlocked: false, firstRun: false } as VaultStatus,
   library: { folders: [], hosts: [], credentials: [], tunnels: [], snippets: [] } as Library,
-  settings: { theme: "dark", autoLockMinutes: 15, clipboardClearSeconds: 30, terminalFontSize: 14, autoUpdate: true } as Settings,
+  settings: { theme: "dark", autoLockMinutes: 15, stayUnlockedWebConsole: true, stayUnlockedDesktop: true, stayUnlockedTransfer: true, keepSessionsWhenLocked: false,clipboardClearSeconds: 30, terminalFontSize: 14, autoUpdate: true } as Settings,
   selectedHostId: null as string | null,
   sidebar: "hosts" as "hosts" | "tunnels" | "credentials" | "snippets",
   groupBy: "folders" as "folders" | "tags",
@@ -121,6 +121,7 @@ export async function boot() {
     for (const r of app.passphrasePrompts) api.passphraseReply(r.id, null);
     app.passphrasePrompts = [];
     app.modal = null;
+    app.menu = null;
     app.paletteOpen = false;
   });
   app.ready = true;

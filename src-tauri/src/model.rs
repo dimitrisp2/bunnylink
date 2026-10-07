@@ -228,6 +228,18 @@ pub struct Settings {
     pub theme: Theme,
     /// Lock the vault after this many idle minutes. 0 disables auto-lock.
     pub auto_lock_minutes: u32,
+    /// Using a web console window counts as activity.
+    #[serde(default = "yes")]
+    pub stay_unlocked_web_console: bool,
+    /// A connected remote desktop counts as activity, even while only watched.
+    #[serde(default = "yes")]
+    pub stay_unlocked_desktop: bool,
+    /// A running file transfer counts as activity.
+    #[serde(default = "yes")]
+    pub stay_unlocked_transfer: bool,
+    /// Terminals and remote desktops stay connected, hidden, while the vault is locked.
+    #[serde(default)]
+    pub keep_sessions_when_locked: bool,
     /// Clear copied credentials from the clipboard after this many seconds.
     pub clipboard_clear_seconds: u32,
     pub terminal_font_size: u16,
@@ -245,6 +257,10 @@ impl Default for Settings {
         Self {
             theme: Theme::Dark,
             auto_lock_minutes: 15,
+            stay_unlocked_web_console: true,
+            stay_unlocked_desktop: true,
+            stay_unlocked_transfer: true,
+            keep_sessions_when_locked: false,
             clipboard_clear_seconds: 30,
             terminal_font_size: 14,
             auto_update: true,

@@ -715,6 +715,7 @@ dependencies = [
  "tokio-rustls",
  "uuid",
  "vnc-rs",
+ "windows-sys 0.61.2",
  "winreg",
  "zip",
 ]

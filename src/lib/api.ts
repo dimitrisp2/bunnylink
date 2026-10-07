@@ -70,6 +70,10 @@ export interface UpdateInfo { current: string; currentChangelog: string; status:
 export interface Settings {
   theme: Theme;
   autoLockMinutes: number;
+  stayUnlockedWebConsole: boolean;
+  stayUnlockedDesktop: boolean;
+  stayUnlockedTransfer: boolean;
+  keepSessionsWhenLocked: boolean;
   clipboardClearSeconds: number;
   terminalFontSize: number;
   autoUpdate: boolean;
@@ -149,6 +153,7 @@ export const api = {
   vaultCreate: (password: string, portable: boolean) => invoke<void>("vault_create", { password, portable }),
   vaultUnlock: (password: string) => invoke<void>("vault_unlock", { password }),
   vaultLock: () => invoke<void>("vault_lock"),
+  userActivity: () => invoke<void>("user_activity"),
   updateStatus: () => invoke<UpdateInfo>("update_status"),
   updateCheck: () => invoke<void>("update_check"),
   updateInstall: () => invoke<void>("update_install"),

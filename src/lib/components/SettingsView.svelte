@@ -75,8 +75,39 @@
         <span>Lock the vault after idle minutes</span>
         <input id="set-lock" type="number" min="0" max="1440" value={app.settings.autoLockMinutes}
           onchange={(e) => set("autoLockMinutes", Math.max(0, +e.currentTarget.value || 0))} />
-        <small class="muted">0 never locks automatically. Open sessions stay connected when the vault locks.</small>
+        <small class="muted">0 never locks automatically.</small>
       </label>
+      <div class="field">
+        <label class="check">
+          <input id="set-keep-sessions" type="checkbox" checked={app.settings.keepSessionsWhenLocked} onchange={(e) => set("keepSessionsWhenLocked", e.currentTarget.checked)} />
+          <span>Keep terminals and remote desktops connected while locked</span>
+        </label>
+        <small class="muted">
+          {#if app.settings.keepSessionsWhenLocked}
+            They stay logged in, hidden behind the lock screen, and can't be used until you unlock.
+          {:else}
+            Locking closes them; they reconnect when you unlock.
+          {/if}
+          Tunnels and file transfers always keep running.
+        </small>
+      </div>
+      {#if app.settings.autoLockMinutes > 0}
+        <div class="field">
+          <span class="lbl">Using BunnyLink always keeps it unlocked. Also stay unlocked while:</span>
+          <label class="check">
+            <input id="set-stay-web" type="checkbox" checked={app.settings.stayUnlockedWebConsole} onchange={(e) => set("stayUnlockedWebConsole", e.currentTarget.checked)} />
+            <span>You use a web console window</span>
+          </label>
+          <label class="check">
+            <input id="set-stay-desktop" type="checkbox" checked={app.settings.stayUnlockedDesktop} onchange={(e) => set("stayUnlockedDesktop", e.currentTarget.checked)} />
+            <span>A remote desktop is connected <small class="muted">(even if you are only watching it)</small></span>
+          </label>
+          <label class="check">
+            <input id="set-stay-transfer" type="checkbox" checked={app.settings.stayUnlockedTransfer} onchange={(e) => set("stayUnlockedTransfer", e.currentTarget.checked)} />
+            <span>A file transfer is running <small class="muted">(off: it keeps running after the lock)</small></span>
+          </label>
+        </div>
+      {/if}
       <label class="field narrow">
         <span>Clear copied passwords after seconds</span>
         <input id="set-clip" type="number" min="0" max="600" value={app.settings.clipboardClearSeconds}

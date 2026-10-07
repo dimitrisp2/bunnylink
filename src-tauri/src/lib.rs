@@ -169,6 +169,12 @@ fn vault_lock(state: State<AppState>) {
     state.vault.lock();
 }
 
+/// The user clicked, typed or scrolled somewhere in the app; it postpones the auto-lock.
+#[tauri::command]
+fn user_activity(state: State<AppState>) {
+    state.touch();
+}
+
 // ---------------------------------------------------------------- import
 
 fn import_plan(app: &AppHandle, source: import::Source, path: Option<String>, password: Option<String>) -> AppResult<import::Plan> {
@@ -978,12 +984,53 @@ fn spawn_update_checks(app: AppHandle) {
     });
 }
 
+const AUTO_LOCK_TICK: Duration = Duration::from_secs(20);
+
+/// Web console windows show other sites, which get no access to the app, so their use is
+/// read from outside: one of them is in front and the user typed or moved the mouse lately.
+fn web_console_in_use(app: &AppHandle, within: Duration) -> bool {
+    let focused = app
+        .webview_windows()
+        .iter()
+        .any(|(label, w)| label.starts_with("web-") && w.is_focused().unwrap_or(false));
+    focused && input_idle().is_some_and(|idle| idle <= within)
+}
+
+/// Time since the last keyboard or mouse input anywhere on the system.
+#[cfg(windows)]
+fn input_idle() -> Option<Duration> {
+    use windows_sys::Win32::System::SystemInformation::GetTickCount;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
+    let mut info = LASTINPUTINFO { cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32, dwTime: 0 };
+    // SAFETY: `info` is a valid LASTINPUTINFO with cbSize set, as the call requires.
+    if unsafe { GetLastInputInfo(&mut info) } == 0 {
+        return None;
+    }
+    // SAFETY: GetTickCount has no preconditions. Both counters wrap after ~49.7 days.
+    let now = unsafe { GetTickCount() };
+    Some(Duration::from_millis(now.wrapping_sub(info.dwTime) as u64))
+}
+
+/// Not known on other platforms, so web console use never counts as activity there.
+#[cfg(not(windows))]
+fn input_idle() -> Option<Duration> {
+    None
+}
+
 fn spawn_auto_lock(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         loop {
-            tokio::time::sleep(Duration::from_secs(20)).await;
+            tokio::time::sleep(AUTO_LOCK_TICK).await;
             let state = app.state::<AppState>();
-            let minutes = state.store.settings().map(|s| s.auto_lock_minutes).unwrap_or(15);
+            let settings = state.store.settings().unwrap_or_default();
+            let minutes = settings.auto_lock_minutes;
+            // Work the user chose to count as activity, besides using the main window.
+            let busy = (settings.stay_unlocked_transfer && !state.transfers.lock().unwrap().is_empty())
+                || (settings.stay_unlocked_desktop && state.desktops.lock().unwrap().values().any(|tx| !tx.is_closed()))
+                || (settings.stay_unlocked_web_console && web_console_in_use(&app, AUTO_LOCK_TICK));
+            if busy {
+                state.touch();
+            }
             let idle = state.last_activity.lock().unwrap().elapsed();
             if minutes > 0 && state.vault.is_unlocked() && idle > Duration::from_secs(minutes as u64 * 60) {
                 state.vault.lock();
@@ -1088,6 +1135,7 @@ pub fn run() {
             vault_create,
             vault_unlock,
             vault_lock,
+            user_activity,
             passphrase_reply,
             update_status,
             update_check,

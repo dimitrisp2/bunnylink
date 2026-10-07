@@ -21,13 +21,32 @@
   import CredentialForm from "$lib/components/CredentialForm.svelte";
   import Icon from "$lib/components/Icon.svelte";
   import { app, toast, boot, afterUnlock, openSettings, quitNow, requestCloseTab, cycleTab, splitRight, unsplit, HOME } from "$lib/state.svelte";
-  import { errorText } from "$lib/api";
+  import { api, errorText } from "$lib/api";
 
   let bootError = $state("");
+  const locked = $derived(!app.vault.unlocked);
+  // With the option on, a lock hides open tabs behind the lock screen instead of closing them.
+  const keepWhileLocked = $derived(app.settings.keepSessionsWhenLocked && app.tabs.some((t) => t.kind !== "settings"));
+  let appEl = $state<HTMLDivElement>();
+  // Move focus off a hidden terminal or desktop, so nothing typed at the lock screen reaches it.
+  $effect(() => {
+    if (locked && appEl?.contains(document.activeElement)) (document.activeElement as HTMLElement).blur();
+  });
 
   onMount(async () => {
     window.addEventListener("error", (e) => toast(`Unexpected error: ${e.message}`, "error"));
     window.addEventListener("unhandledrejection", (e) => toast(`Unexpected error: ${errorText(e.reason)}`, "error"));
+    // Any interaction postpones the auto-lock, not only the actions that reach the backend.
+    // Captured, so events a component stops (menus, terminals) still count; sent at most every 15 s.
+    let lastActivity = 0;
+    const activity = () => {
+      const now = Date.now();
+      if (!app.vault.unlocked || now - lastActivity < 15_000) return;
+      lastActivity = now;
+      api.userActivity().catch(() => {});
+    };
+    for (const type of ["pointerdown", "pointermove", "keydown", "wheel"])
+      window.addEventListener(type, activity, { capture: true, passive: true });
     try {
       await boot();
       if (app.vault.unlocked) await afterUnlock();
@@ -90,10 +109,11 @@
   <div class="fatal"><h1>BunnyLink could not start</h1><p>{bootError}</p></div>
 {:else if !app.ready}
   <div></div>
-{:else if !app.vault.unlocked}
+{:else if locked && !keepWhileLocked}
   <Unlock />
 {:else}
-  <div class="app">
+  <!-- While locked it is hidden and inert: no clicks, keys or focus reach it. -->
+  <div class="app" class:locked inert={locked} bind:this={appEl}>
     <header class="bar">
       <span class="brand"><img src="/logo-small.png" alt="" /><span>Bunny<b>Link</b></span></span>
       <button class="search" onclick={() => (app.paletteOpen = true)}>
@@ -110,6 +130,9 @@
     <StatusBar />
   </div>
 
+  {#if locked}
+    <div class="lock-over"><Unlock /></div>
+  {:else}
   {#if app.paletteOpen}<Palette />{/if}
   {#if app.menu}<ContextMenu menu={app.menu} />{/if}
   {#each app.passphrasePrompts.slice(0, 1) as request (request.id)}
@@ -138,6 +161,7 @@
     <Confirm title={app.modal.title} body={app.modal.body} confirm={app.modal.confirm} run={app.modal.run} />
   {/if}
   {/key}
+  {/if}
 {/if}
 
 {#if app.quitConfirm}
@@ -155,6 +179,9 @@
 
 <style>
   .app { height: 100%; display: grid; grid-template-rows: 40px 1fr auto; }
+  /* Hidden but laid out, so terminals and desktops don't see a resize. */
+  .app.locked { visibility: hidden; }
+  .lock-over { position: fixed; inset: 0; z-index: 1000; }
   .bar { display: flex; align-items: center; gap: 12px; padding: 0 10px 0 14px; border-bottom: 1px solid var(--line); background: var(--panel); }
   .brand { font-weight: 700; font-size: 14px; width: 220px; display: flex; align-items: center; gap: 8px; }
   .brand img { width: 24px; height: 24px; border-radius: 5px; }
