@@ -16,7 +16,7 @@ jobs:
     # which accepts v* tags only.
     environment: release
     permissions:
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -90,16 +90,12 @@ jobs:
           US_TOKEN: ${{ secrets.US_TOKEN }}
         run: node scripts/publish-update.mjs --version="$VERSION" --changelog=changelog.md "bunnylink-$VERSION.zip"
 
+      # Releases go to the update server only; the run keeps a copy for testing.
       - name: Upload executable
         uses: actions/upload-artifact@v4
         with:
           name: BunnyLink-windows-exe
           path: src-tauri/target/release/bunnylink.exe
           if-no-files-found: error
+          retention-days: 7
 
-      - name: Attach to release
-        uses: softprops/action-gh-release@v2
-        with:
-          draft: true
-          body_path: changelog.md
-          files: src-tauri/target/release/bunnylink.exe
