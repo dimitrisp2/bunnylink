@@ -74,7 +74,17 @@ export interface Settings {
   terminalFontSize: number;
   autoUpdate: boolean;
 }
-export interface Library { folders: Folder[]; hosts: Host[]; credentials: Credential[]; tunnels: Tunnel[] }
+/** A saved command. With no folders and no tags it applies to every host. */
+export interface Snippet {
+  id: string;
+  name: string;
+  command: string;
+  description: string;
+  sendEnter: boolean;
+  folderIds: string[];
+  tags: string[];
+}
+export interface Library { folders: Folder[]; hosts: Host[]; credentials: Credential[]; tunnels: Tunnel[]; snippets: Snippet[] }
 export interface VaultStatus { initialized: boolean; unlocked: boolean; firstRun: boolean }
 export type TermEvent =
   | { type: "notice"; text: string }
@@ -159,6 +169,8 @@ export const api = {
   deleteCredential: (id: string) => invoke<void>("delete_credential", { id }),
   saveTunnel: (tunnel: Tunnel) => invoke<Tunnel>("save_tunnel", { tunnel }),
   deleteTunnel: (id: string) => invoke<void>("delete_tunnel", { id }),
+  saveSnippet: (snippet: Snippet) => invoke<Snippet>("save_snippet", { snippet }),
+  deleteSnippet: (id: string) => invoke<void>("delete_snippet", { id }),
   settings: () => invoke<Settings>("get_settings"),
   saveSettings: (settings: Settings) => invoke<void>("save_settings", { settings }),
   forgetHostKey: (hostId: string) => invoke<void>("forget_host_key", { hostId }),

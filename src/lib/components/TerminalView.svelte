@@ -11,7 +11,7 @@
   import Icon from "./Icon.svelte";
   import { api, errorText } from "../api";
   import type { TermEvent } from "../api";
-  import { app, type Tab } from "../state.svelte";
+  import { app, registerSnippetTarget, toast, type Tab } from "../state.svelte";
 
   let { tab, visible }: { tab: Tab; visible: boolean } = $props();
 
@@ -26,6 +26,7 @@
   let sessionId: string | null = null;
   let observer: ResizeObserver;
   let resizeTimer: ReturnType<typeof setTimeout>;
+  let unregister = () => {};
 
   const live = () => app.tabs.find((t) => t.id === tab.id);
   const setStatus = (s: Tab["status"]) => {
@@ -254,6 +255,15 @@
       resizeTimer = setTimeout(() => sessionId && api.terminalResize(sessionId, cols, rows), 80);
     });
 
+    // Snippets are typed in as if from the keyboard: each line ends with Enter.
+    unregister = registerSnippetTarget(tab.id, {
+      send: (text, enter) => {
+        if (!sessionId) return toast("This terminal is not connected.");
+        api.terminalInput(sessionId, text.replace(/\r?\n/g, "\r") + (enter ? "\r" : ""));
+      },
+      focus: () => term.focus(),
+    });
+
     observer = new ResizeObserver(() => refit());
     observer.observe(el);
 
@@ -282,6 +292,7 @@
   });
 
   onDestroy(() => {
+    unregister();
     observer?.disconnect();
     if (sessionId) api.terminalClose(sessionId);
     term?.dispose();

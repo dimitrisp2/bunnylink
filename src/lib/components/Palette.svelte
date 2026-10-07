@@ -5,7 +5,7 @@
   import Icon from "./Icon.svelte";
   import { api } from "../api";
   import {
-    app, hostActions, openSettings, toggleTunnel, tunnelSummary, saveSettings, unsplit, attempt,
+    app, hostActions, hostById, openSettings, runSnippet, snippetApplies, snippetTab, toggleTunnel, tunnelSummary, saveSettings, unsplit, attempt,
   } from "../state.svelte";
 
   interface Item { id: string; icon: string; title: string; host?: string; detail: string; hay: string; name: string; weight: number; soon?: boolean; run: () => void }
@@ -55,12 +55,24 @@
         run: () => toggleTunnel(t),
       });
     }
+    // With a terminal focused, its host's snippets come first.
+    const target = snippetTab();
+    const targetHost = target && hostById(target.hostId);
+    if (target)
+      for (const s of app.library.snippets.filter((s) => snippetApplies(s, targetHost)))
+        out.push({
+          id: `snippet:${s.id}`, icon: "play", title: s.name, detail: s.description || s.command.split("\n")[0],
+          hay: `${s.name} ${s.description} ${s.command} snippet`.toLowerCase(), name: s.name.toLowerCase(), weight: 3,
+          run: () => runSnippet(s, target.id),
+        });
     const cmd = (id: string, icon: string, title: string, detail: string, run: () => void, extra = "") =>
       out.push({ id, icon, title, detail, hay: `${title} ${extra}`.toLowerCase(), name: title.toLowerCase(), weight: 0, run });
     cmd("new-host", "plus", "New host", "Add a server or device", () => (app.modal = { kind: "host", host: null }), "add create");
     cmd("new-folder", "folder", "New folder", "Group hosts and share settings", () => (app.modal = { kind: "folder", folder: null }), "add create");
     cmd("new-tunnel", "tunnel", "New tunnel", "Local, remote or SOCKS", () => (app.modal = { kind: "tunnel", tunnel: null }), "add create forward port");
     cmd("new-cred", "key", "New credential", "Password or private key", () => (app.modal = { kind: "credential", credential: null }), "add create password key");
+    cmd("new-snippet", "plus", "New snippet", "Save a command to send to terminals", () => (app.modal = { kind: "snippet", snippet: null }), "add create command macro");
+    cmd("snippets", "play", "Snippets", "Manage saved commands", () => (app.sidebar = "snippets"), "commands macros");
     cmd("import", "download", "Import connections", "From mRemoteNG, PuTTY or ~/.ssh/config", () => (app.modal = { kind: "import" }), "mremoteng putty openssh ssh config");
     cmd("settings", "settings", "Settings", "Appearance, security, about", openSettings, "preferences options version licenses");
     cmd("credentials", "key", "Credentials", "Manage saved passwords and keys", () => (app.sidebar = "credentials"), "passwords keys");

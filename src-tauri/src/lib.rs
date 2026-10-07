@@ -323,6 +323,24 @@ fn delete_tunnel(state: State<AppState>, id: String) -> AppResult<()> {
 }
 
 #[tauri::command]
+fn save_snippet(state: State<AppState>, mut snippet: Snippet) -> AppResult<Snippet> {
+    state.touch();
+    if snippet.id.is_empty() {
+        snippet.id = new_id();
+    }
+    if snippet.name.trim().is_empty() || snippet.command.trim().is_empty() {
+        return Err(AppError::Invalid("A snippet needs a name and a command.".into()));
+    }
+    state.store.save_snippet(&snippet)?;
+    Ok(snippet)
+}
+
+#[tauri::command]
+fn delete_snippet(state: State<AppState>, id: String) -> AppResult<()> {
+    state.store.delete_snippet(&id)
+}
+
+#[tauri::command]
 fn get_settings(state: State<AppState>) -> AppResult<Settings> {
     state.store.settings()
 }
@@ -1084,6 +1102,8 @@ pub fn run() {
             delete_credential,
             save_tunnel,
             delete_tunnel,
+            save_snippet,
+            delete_snippet,
             get_settings,
             save_settings,
             forget_host_key,

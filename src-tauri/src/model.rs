@@ -193,6 +193,27 @@ pub struct Tunnel {
     pub target_port: Option<u16>,
 }
 
+/// A saved command sent to a terminal. `{{name}}` and `{{name:default}}` are filled in
+/// before sending. With no folders and no tags it applies to every host.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Snippet {
+    pub id: String,
+    pub name: String,
+    pub command: String,
+    #[serde(default)]
+    pub description: String,
+    /// Press Enter after the command is typed.
+    #[serde(default)]
+    pub send_enter: bool,
+    /// Hosts in these folders (or their subfolders).
+    #[serde(default)]
+    pub folder_ids: Vec<String>,
+    /// Hosts with any of these tags.
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Theme {
@@ -238,4 +259,5 @@ pub struct Library {
     pub hosts: Vec<Host>,
     pub credentials: Vec<Credential>,
     pub tunnels: Vec<Tunnel>,
+    pub snippets: Vec<Snippet>,
 }

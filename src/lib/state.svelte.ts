@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, errorText, PROTOCOLS } from "./api";
-import type { Folder, Host, Library, PassphraseRequest, Protocol, Settings, UpdateInfo, Theme, Transfer, Tunnel, TunnelStatus, VaultStatus, Credential } from "./api";
+import type { Folder, Host, Library, PassphraseRequest, Protocol, Settings, Snippet, UpdateInfo, Theme, Transfer, Tunnel, TunnelStatus, VaultStatus, Credential } from "./api";
 
 export type TabKind = "terminal" | "command" | "files" | "desktop" | "settings";
 export type TabStatus = "connecting" | "open" | "closed" | "error";
@@ -17,6 +17,8 @@ export type Modal =
   | { kind: "credential"; credential: Credential | null; onSaved?: (c: Credential) => void }
   | { kind: "tunnel"; tunnel: Tunnel | null; hostId?: string; targetPort?: number }
   | { kind: "import" }
+  | { kind: "snippet"; snippet: Snippet | null }
+  | { kind: "snippetRun"; snippet: Snippet; tabId: string; fields: Placeholder[]; values: Record<string, string> }
   | { kind: "confirm"; title: string; body: string; confirm: string; run: () => Promise<void> | void };
 
 export interface Toast { id: number; text: string; kind: "info" | "error" }
@@ -31,10 +33,10 @@ export const app = $state({
   /** The theme actually shown ("auto" resolved against the OS setting). */
   shownTheme: "dark" as "dark" | "light",
   vault: { initialized: false, unlocked: false, firstRun: false } as VaultStatus,
-  library: { folders: [], hosts: [], credentials: [], tunnels: [] } as Library,
+  library: { folders: [], hosts: [], credentials: [], tunnels: [], snippets: [] } as Library,
   settings: { theme: "dark", autoLockMinutes: 15, clipboardClearSeconds: 30, terminalFontSize: 14, autoUpdate: true } as Settings,
   selectedHostId: null as string | null,
-  sidebar: "hosts" as "hosts" | "tunnels" | "credentials",
+  sidebar: "hosts" as "hosts" | "tunnels" | "credentials" | "snippets",
   groupBy: "folders" as "folders" | "tags",
   tagFilter: null as string | null,
   filter: "",
@@ -519,6 +521,99 @@ export function tunnelSummary(t: Tunnel): string {
   if (t.kind === "socks") return `SOCKS on localhost:${t.bindPort} via ${via}`;
   if (t.kind === "local") return `localhost:${t.bindPort} → ${t.targetHost}:${t.targetPort} via ${via}`;
   return `${via}:${t.bindPort} → ${t.targetHost}:${t.targetPort} (remote)`;
+}
+
+// ------------------------------------------------------------------ snippets
+
+/** Where a snippet can be sent: an open terminal or a Run command tab. */
+export interface SnippetTarget { send: (text: string, enter: boolean) => void; focus: () => void }
+const snippetTargets = new Map<string, SnippetTarget>();
+
+/** Called by terminal and command views; returns the unregister function. */
+export function registerSnippetTarget(tabId: string, target: SnippetTarget) {
+  snippetTargets.set(tabId, target);
+  return () => snippetTargets.delete(tabId);
+}
+
+/** The tab in the focused pane, when it can take a snippet. */
+export function snippetTab(): Tab | undefined {
+  const t = app.tabs.find((x) => x.id === app.panes[app.focus]);
+  return t && (t.kind === "terminal" || t.kind === "command") ? t : undefined;
+}
+
+/** True when the snippet is global, or the host is in one of its folders or has one of its tags. */
+export function snippetApplies(s: Snippet, h: Host | undefined): boolean {
+  if (!s.folderIds.length && !s.tags.length) return true;
+  if (!h) return false;
+  if (h.tags.some((t) => s.tags.includes(t))) return true;
+  let f = folderById(h.folderId);
+  for (let guard = 0; f && guard < 32; guard++, f = folderById(f.parentId)) if (s.folderIds.includes(f.id)) return true;
+  return false;
+}
+
+export interface Placeholder { name: string; default: string }
+const PLACEHOLDER = /\{\{\s*([\w.-]+)\s*(?::([^}]*))?\}\}/g;
+/** Filled in from the host without asking. */
+export const BUILTIN_PLACEHOLDERS = ["host", "address", "user"];
+
+/** The placeholders in a command, in order, each once. */
+export function placeholders(command: string): Placeholder[] {
+  const out: Placeholder[] = [];
+  for (const m of command.matchAll(PLACEHOLDER))
+    if (!out.some((p) => p.name === m[1])) out.push({ name: m[1], default: m[2]?.trim() ?? "" });
+  return out;
+}
+
+export const fillPlaceholders = (command: string, values: Record<string, string>) =>
+  command.replace(PLACEHOLDER, (_, name: string, def?: string) => values[name] ?? def?.trim() ?? "");
+
+/** Values typed for each snippet this session, offered again next time. */
+const lastValues: Record<string, Record<string, string>> = {};
+
+/** Sends a snippet to the focused terminal, asking first for any placeholders. */
+export async function runSnippet(s: Snippet, tabId = snippetTab()?.id) {
+  const tab = app.tabs.find((t) => t.id === tabId);
+  if (!tab || !snippetTargets.has(tab.id)) return toast("Open a terminal to send a snippet to.");
+  const h = hostById(tab.hostId);
+  const values: Record<string, string> = { host: h?.name ?? "", address: h?.address ?? "" };
+  const fields = placeholders(s.command);
+  if (fields.some((f) => f.name === "user"))
+    values.user = (await api.effective(tab.hostId).catch(() => null))?.username ?? "";
+  const ask = fields.filter((f) => !BUILTIN_PLACEHOLDERS.includes(f.name));
+  if (!ask.length) return sendSnippet(s, tab.id, values);
+  const last = lastValues[s.id] ?? {};
+  for (const f of ask) values[f.name] = last[f.name] ?? f.default;
+  app.modal = { kind: "snippetRun", snippet: s, tabId: tab.id, fields: ask, values };
+}
+
+export function sendSnippet(s: Snippet, tabId: string, values: Record<string, string>) {
+  const target = snippetTargets.get(tabId);
+  if (!target) return toast("That tab is closed.");
+  lastValues[s.id] = { ...values };
+  target.send(fillPlaceholders(s.command, values), s.sendEnter);
+  showTab(tabId);
+  requestAnimationFrame(() => target.focus());
+}
+
+export function deleteSnippet(s: Snippet) {
+  app.modal = {
+    kind: "confirm", title: `Delete snippet ${s.name}?`, body: "The saved command is removed.", confirm: "Delete snippet",
+    run: async () => { await attempt(() => api.deleteSnippet(s.id)); await reload(); },
+  };
+}
+
+export function snippetMenu(e: MouseEvent, s: Snippet) {
+  const tab = snippetTab();
+  openMenu(e, [
+    { label: tab ? `Send to ${tab.title}` : "Send to terminal", run: () => runSnippet(s), disabled: !tab },
+    { label: "Edit", run: () => (app.modal = { kind: "snippet", snippet: s }) },
+    "separator",
+    { label: "Delete", run: () => deleteSnippet(s), danger: true },
+  ]);
+}
+
+export function newSnippet(): Snippet {
+  return { id: "", name: "", command: "", description: "", sendEnter: true, folderIds: [], tags: [] };
 }
 
 // ------------------------------------------------------------------ editing helpers

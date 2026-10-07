@@ -2,10 +2,11 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later OR LicenseRef-BunnyCloud-Commercial -->
 <script lang="ts">
   import Icon from "./Icon.svelte";
-  import type { Credential, Folder, Host } from "../api";
+  import type { Credential, Folder, Host, Snippet } from "../api";
   import { PROTOCOLS } from "../api";
   import {
-    app, allTags, credentialMenu, deleteCredential, hostActions, hostMenu, toggleTunnel, tunnelMenu, tunnelSummary, showTab, HOME,
+    app, allTags, credentialMenu, deleteCredential, folderById, hostActions, hostById, hostMenu, runSnippet, snippetApplies, snippetMenu,
+    snippetTab, toggleTunnel, tunnelMenu, tunnelSummary, showTab, HOME,
   } from "../state.svelte";
 
   const q = $derived(app.filter.trim().toLowerCase());
@@ -43,6 +44,14 @@
   const credentialUsage = (id: string) =>
     app.library.hosts.filter((h) => h.overrides.credentialId === id).length +
     app.library.folders.filter((f) => f.defaults.credentialId === id).length;
+
+  const snippets = $derived([...app.library.snippets].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })));
+  function snippetScope(s: Snippet): string {
+    const folders = s.folderIds.map((id) => folderById(id)?.name).filter(Boolean);
+    const parts = [...folders, ...s.tags.map((t) => `#${t}`)];
+    if (!parts.length) return s.folderIds.length ? "No hosts (its folder was deleted)" : "All hosts";
+    return parts.join(", ");
+  }
 </script>
 
 {#snippet hostRow(h: Host, depth: number)}
@@ -83,9 +92,11 @@
 
 <aside>
   <div class="seg">
-    <button class:act={app.sidebar === "hosts"} onclick={() => (app.sidebar = "hosts")}>Hosts <span>{app.library.hosts.length}</span></button>
-    <button class:act={app.sidebar === "tunnels"} onclick={() => (app.sidebar = "tunnels")}>Tunnels <span>{app.library.tunnels.length}</span></button>
-    <button class:act={app.sidebar === "credentials"} onclick={() => (app.sidebar = "credentials")}>Credentials <span>{app.library.credentials.length}</span></button>
+    <!-- Four tabs don't fit with their counts; the counts are in the tooltips. -->
+    <button class:act={app.sidebar === "hosts"} title="{app.library.hosts.length} hosts" onclick={() => (app.sidebar = "hosts")}>Hosts</button>
+    <button class:act={app.sidebar === "tunnels"} title="{app.library.tunnels.length} tunnels" onclick={() => (app.sidebar = "tunnels")}>Tunnels</button>
+    <button class:act={app.sidebar === "credentials"} title="{app.library.credentials.length} credentials" onclick={() => (app.sidebar = "credentials")}>Credentials</button>
+    <button class:act={app.sidebar === "snippets"} title="{app.library.snippets.length} snippets" onclick={() => (app.sidebar = "snippets")}>Snippets</button>
   </div>
 
   {#if app.sidebar === "hosts"}
@@ -149,6 +160,35 @@
         </div>
       {/each}
     </div>
+  {:else if app.sidebar === "snippets"}
+    {@const target = snippetTab()}
+    <div class="tools">
+      <span class="muted grow">Saved commands</span>
+      <button class="icon-btn" title="New snippet" onclick={() => (app.modal = { kind: "snippet", snippet: null })}><Icon name="plus" /></button>
+    </div>
+    <div class="list">
+      {#each snippets as s (s.id)}
+        {@const usable = !!target && snippetApplies(s, hostById(target.hostId))}
+        <div class="snip" role="listitem" oncontextmenu={(e) => snippetMenu(e, s)}>
+          <button class="tinfo" title={s.description || `Edit ${s.name}`} onclick={() => (app.modal = { kind: "snippet", snippet: s })}>
+            <span class="name">{s.name}</span>
+            <small class="mono">{s.command.split("\n")[0]}</small>
+            <small class="scope">{snippetScope(s)}</small>
+          </button>
+          <button
+            class="icon-btn"
+            disabled={!usable}
+            title={!target ? "Open a terminal to send this to" : usable ? `Send to ${target.title}` : `Not available for ${hostById(target.hostId)?.name ?? "this host"}`}
+            onclick={() => runSnippet(s)}
+          ><Icon name="play" size={14} /></button>
+        </div>
+      {:else}
+        <div class="empty">
+          <p>No snippets yet. Save commands you type often and send them to any terminal, with blanks filled in when you send.</p>
+          <button class="btn primary" onclick={() => (app.modal = { kind: "snippet", snippet: null })}><Icon name="plus" size={14} /> New snippet</button>
+        </div>
+      {/each}
+    </div>
   {:else}
     <div class="tools">
       <span class="muted grow">Saved tunnels</span>
@@ -181,8 +221,7 @@
 <style>
   aside { display: grid; grid-template-rows: auto auto auto 1fr; min-height: 0; background: var(--panel); border-right: 1px solid var(--line); }
   .seg { display: flex; gap: 2px; padding: 8px; }
-  .seg button { flex: 1 1 auto; padding: 5px 6px; border-radius: 5px; color: var(--muted); font-weight: 600; white-space: nowrap; }
-  .seg button span { font-weight: 400; color: var(--faint); margin-left: 3px; }
+  .seg button { flex: 1 1 auto; padding: 5px 4px; border-radius: 5px; color: var(--muted); font-weight: 600; font-size: 12px; white-space: nowrap; }
   .seg button.act { background: var(--panel-2); color: var(--fg); box-shadow: inset 0 0 0 1px var(--line); }
   .tools { display: flex; gap: 6px; padding: 0 8px 8px; align-items: center; }
   .tools input { padding: 5px 8px; }
@@ -211,6 +250,9 @@
   .none { padding: 8px 12px; margin: 0; }
   .tunnel { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; }
   .tunnel:hover { background: var(--panel-2); }
+  .snip { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; }
+  .snip:hover { background: var(--panel-2); }
+  .snip .scope { color: var(--faint); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .cred { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; color: var(--muted); }
   .cred:hover { background: var(--panel-2); }
   .cred .tinfo { color: var(--fg); }

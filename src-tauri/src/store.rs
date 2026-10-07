@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS folders     (id TEXT PRIMARY KEY, doc TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS hosts       (id TEXT PRIMARY KEY, doc TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS credentials (id TEXT PRIMARY KEY, doc TEXT NOT NULL, secret BLOB);
 CREATE TABLE IF NOT EXISTS tunnels     (id TEXT PRIMARY KEY, doc TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS snippets    (id TEXT PRIMARY KEY, doc TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS known_hosts (host TEXT NOT NULL, port INTEGER NOT NULL, fingerprint TEXT NOT NULL,
                                         PRIMARY KEY (host, port));
 CREATE TABLE IF NOT EXISTS meta        (key TEXT PRIMARY KEY, value BLOB NOT NULL);
@@ -116,6 +117,17 @@ impl Store {
             h.folder_id = folder.parent_id.clone();
             self.put("hosts", &h.id, &h)?;
         }
+        // Snippets follow the hosts to the parent folder. A top-level folder has none; the
+        // snippet keeps the old id and matches no host until edited, rather than becoming global.
+        if let Some(parent) = &folder.parent_id {
+            for mut s in self.snippets()?.into_iter().filter(|s| s.folder_ids.iter().any(|f| f == id)) {
+                s.folder_ids.retain(|f| f != id);
+                if !s.folder_ids.contains(parent) {
+                    s.folder_ids.push(parent.clone());
+                }
+                self.put("snippets", &s.id, &s)?;
+            }
+        }
         self.delete("folders", id)
     }
 
@@ -196,6 +208,11 @@ impl Store {
     pub fn save_tunnel(&self, t: &Tunnel) -> AppResult<()> { self.put("tunnels", &t.id, t) }
     pub fn delete_tunnel(&self, id: &str) -> AppResult<()> { self.delete("tunnels", id) }
 
+    // ---- snippets ----
+    pub fn snippets(&self) -> AppResult<Vec<Snippet>> { self.list("snippets") }
+    pub fn save_snippet(&self, s: &Snippet) -> AppResult<()> { self.put("snippets", &s.id, s) }
+    pub fn delete_snippet(&self, id: &str) -> AppResult<()> { self.delete("snippets", id) }
+
     // ---- known hosts ----
     pub fn known_host(&self, host: &str, port: u16) -> AppResult<Option<String>> {
         Ok(self
@@ -251,6 +268,7 @@ impl Store {
             hosts: self.hosts()?,
             credentials: self.credentials()?,
             tunnels: self.tunnels()?,
+            snippets: self.snippets()?,
         })
     }
 }
@@ -305,6 +323,32 @@ mod tests {
         s.save_folder(&folder("a", None, None)).unwrap();
         s.save_folder(&folder("b", Some("a"), None)).unwrap();
         assert!(s.save_folder(&folder("a", Some("b"), None)).is_err());
+    }
+
+    #[test]
+    fn deleting_folder_moves_snippets_up() {
+        let s = Store::in_memory().unwrap();
+        s.save_folder(&folder("a", None, None)).unwrap();
+        s.save_folder(&folder("b", Some("a"), None)).unwrap();
+        let snippet = |id: &str, folders: &[&str]| Snippet {
+            id: id.into(),
+            name: id.into(),
+            command: "uptime".into(),
+            description: String::new(),
+            send_enter: true,
+            folder_ids: folders.iter().map(|f| f.to_string()).collect(),
+            tags: vec![],
+        };
+        s.save_snippet(&snippet("in-b", &["b"])).unwrap();
+        s.save_snippet(&snippet("in-a-and-b", &["a", "b"])).unwrap();
+        s.save_snippet(&snippet("in-a", &["a"])).unwrap();
+        s.delete_folder("b").unwrap();
+        s.delete_folder("a").unwrap();
+        let by_id = |id: &str| s.snippets().unwrap().into_iter().find(|x| x.id == id).unwrap().folder_ids;
+        // "b" moved up into "a" without a duplicate; deleting top-level "a" keeps the id.
+        assert_eq!(by_id("in-b"), ["a"]);
+        assert_eq!(by_id("in-a-and-b"), ["a"]);
+        assert_eq!(by_id("in-a"), ["a"]);
     }
 
     #[test]

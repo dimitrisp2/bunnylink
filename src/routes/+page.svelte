@@ -11,6 +11,8 @@
   import HostEditor from "$lib/components/HostEditor.svelte";
   import FolderEditor from "$lib/components/FolderEditor.svelte";
   import TunnelEditor from "$lib/components/TunnelEditor.svelte";
+  import SnippetEditor from "$lib/components/SnippetEditor.svelte";
+  import SnippetRun from "$lib/components/SnippetRun.svelte";
   import ImportModal from "$lib/components/ImportModal.svelte";
   import Confirm from "$lib/components/Confirm.svelte";
   import ContextMenu from "$lib/components/ContextMenu.svelte";
@@ -128,6 +130,10 @@
     </Modal>
   {:else if app.modal?.kind === "import"}
     <ImportModal />
+  {:else if app.modal?.kind === "snippet"}
+    <SnippetEditor snippet={app.modal.snippet} />
+  {:else if app.modal?.kind === "snippetRun"}
+    <SnippetRun snippet={app.modal.snippet} tabId={app.modal.tabId} fields={app.modal.fields} values={app.modal.values} />
   {:else if app.modal?.kind === "confirm"}
     <Confirm title={app.modal.title} body={app.modal.body} confirm={app.modal.confirm} run={app.modal.run} />
   {/if}

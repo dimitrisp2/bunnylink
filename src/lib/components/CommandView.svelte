@@ -1,9 +1,10 @@
 <!-- SPDX-FileCopyrightText: 2026 BunnyCloud.IT -->
 <!-- SPDX-License-Identifier: GPL-3.0-or-later OR LicenseRef-BunnyCloud-Commercial -->
 <script lang="ts">
+  import { onMount } from "svelte";
   import Icon from "./Icon.svelte";
   import { api, errorText } from "../api";
-  import { app, hostById, type Tab } from "../state.svelte";
+  import { app, hostById, registerSnippetTarget, type Tab } from "../state.svelte";
 
   let { tab }: { tab: Tab } = $props();
   const host = $derived(hostById(tab.hostId));
@@ -19,8 +20,25 @@
   };
   setStatus("open");
 
-  async function run(e: SubmitEvent) {
+  let input: HTMLInputElement;
+  // A snippet fills the field, and runs when it presses Enter. A multi-line one can't
+  // be edited in the field, so it always runs.
+  onMount(() =>
+    registerSnippetTarget(tab.id, {
+      send: (text, enter) => {
+        command = text;
+        if (enter || text.includes("\n")) execute();
+      },
+      focus: () => input?.focus(),
+    }),
+  );
+
+  function run(e: SubmitEvent) {
     e.preventDefault();
+    execute();
+  }
+
+  async function execute() {
     const cmd = command.trim();
     if (!cmd || busy) return;
     busy = true;
@@ -42,7 +60,7 @@
   <form onsubmit={run}>
     <span class="prompt mono">{host?.name ?? "host"} $</span>
     <!-- svelte-ignore a11y_autofocus -->
-    <input id="cmd-{tab.id}" class="mono" placeholder="Command to run, e.g. uptime" bind:value={command} autofocus />
+    <input id="cmd-{tab.id}" class="mono" placeholder="Command to run, e.g. uptime" bind:this={input} bind:value={command} autofocus />
     <button class="btn primary" type="submit" disabled={busy || !command.trim()}><Icon name="play" size={13} /> {busy ? "Running…" : "Run"}</button>
   </form>
   <div class="runs">
