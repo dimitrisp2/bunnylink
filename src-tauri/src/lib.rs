@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 BunnyCloud.IT
 // SPDX-License-Identifier: GPL-3.0-or-later OR LicenseRef-BunnyCloud-Commercial
+mod clipboard;
 mod display;
 mod error;
 mod files;
@@ -396,7 +397,7 @@ fn copy_credential(app: AppHandle, state: State<AppState>, host_id: String, fiel
         }
         _ => return Err(AppError::Invalid("Unknown field.".into())),
     };
-    app.clipboard().write_text(text.to_string()).map_err(|e| AppError::Other(e.to_string()))?;
+    clipboard::copy_private(&app, &text)?;
     let seconds = state.store.settings()?.clipboard_clear_seconds;
     if seconds > 0 && field == "password" {
         tauri::async_runtime::spawn(async move {
