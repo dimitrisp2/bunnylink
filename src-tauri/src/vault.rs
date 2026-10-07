@@ -4,8 +4,9 @@
 //! each secret with XChaCha20-Poly1305. Only the salt and an encrypted check value are
 //! stored; the key exists only in memory while the vault is unlocked.
 //!
-//! The key lives in one heap allocation that is wiped on lock, and decrypted plaintext is
-//! returned as `Zeroizing`, so it is wiped as soon as the caller is done with it.
+//! The key lives in one fixed allocation that is wiped on lock; on Windows it is a page of
+//! its own, kept out of the page file and crash reports. Decrypted plaintext is returned
+//! as `Zeroizing`, so it is wiped as soon as the caller is done with it.
 
 use std::sync::Mutex;
 
@@ -22,8 +23,117 @@ const CHECK_KEY: &str = "vault.check";
 const CHECK_PLAINTEXT: &[u8] = b"bunnylink-vault-v1";
 const NONCE_LEN: usize = 24;
 
-/// Boxed so the key never moves (a move would leave a stale copy) and is wiped on drop.
-type Key = Box<Zeroizing<[u8; 32]>>;
+/// The key never moves (a move would leave a stale copy) and is wiped on drop.
+type Key = key_memory::KeyBuf;
+
+mod key_memory {
+    use std::ops::{Deref, DerefMut};
+    use zeroize::Zeroize;
+
+    /// A page of its own, allocated zeroed, locked in RAM so it is never written to the
+    /// page file, and excluded from Windows Error Reporting crash dumps. Failing to lock or
+    /// exclude only loses that extra protection; the key still works and is still wiped.
+    #[cfg(windows)]
+    pub struct KeyBuf(std::ptr::NonNull<[u8; 32]>);
+
+    #[cfg(windows)]
+    const PAGE: usize = 4096;
+
+    // SAFETY: the page belongs to this value alone, and access goes through &self / &mut self.
+    #[cfg(windows)]
+    unsafe impl Send for KeyBuf {}
+    #[cfg(windows)]
+    unsafe impl Sync for KeyBuf {}
+
+    #[cfg(windows)]
+    impl KeyBuf {
+        pub fn new() -> Self {
+            use windows_sys::Win32::System::ErrorReporting::WerRegisterExcludedMemoryBlock;
+            use windows_sys::Win32::System::Memory::{VirtualAlloc, VirtualLock, MEM_COMMIT, MEM_RESERVE, PAGE_READWRITE};
+            // SAFETY: asks for a fresh committed page; a null result is handled below.
+            let page = unsafe { VirtualAlloc(std::ptr::null(), PAGE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE) };
+            let ptr = std::ptr::NonNull::new(page.cast::<[u8; 32]>()).expect("no memory for the vault key");
+            // SAFETY: `page` is PAGE bytes we own until Drop releases them.
+            unsafe {
+                VirtualLock(page, PAGE);
+                WerRegisterExcludedMemoryBlock(page, PAGE as u32);
+            }
+            Self(ptr)
+        }
+    }
+
+    #[cfg(windows)]
+    impl Drop for KeyBuf {
+        fn drop(&mut self) {
+            use windows_sys::Win32::System::ErrorReporting::WerUnregisterExcludedMemoryBlock;
+            use windows_sys::Win32::System::Memory::{VirtualFree, VirtualUnlock, MEM_RELEASE};
+            self.zeroize();
+            let page = self.0.as_ptr().cast();
+            // SAFETY: the page came from VirtualAlloc in `new` and is not used after this.
+            unsafe {
+                WerUnregisterExcludedMemoryBlock(page);
+                VirtualUnlock(page, PAGE);
+                VirtualFree(page, 0, MEM_RELEASE);
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    impl Deref for KeyBuf {
+        type Target = [u8; 32];
+        fn deref(&self) -> &[u8; 32] {
+            // SAFETY: the pointer is valid, aligned and initialised (VirtualAlloc zeroes) for our lifetime.
+            unsafe { self.0.as_ref() }
+        }
+    }
+
+    #[cfg(windows)]
+    impl DerefMut for KeyBuf {
+        fn deref_mut(&mut self) -> &mut [u8; 32] {
+            // SAFETY: as in deref; &mut self makes this the only reference.
+            unsafe { self.0.as_mut() }
+        }
+    }
+
+    /// Elsewhere: a plain heap allocation, still fixed in place and wiped on drop.
+    #[cfg(not(windows))]
+    pub struct KeyBuf(Box<[u8; 32]>);
+
+    #[cfg(not(windows))]
+    impl KeyBuf {
+        pub fn new() -> Self {
+            Self(Box::new([0u8; 32]))
+        }
+    }
+
+    #[cfg(not(windows))]
+    impl Drop for KeyBuf {
+        fn drop(&mut self) {
+            self.zeroize();
+        }
+    }
+
+    #[cfg(not(windows))]
+    impl Deref for KeyBuf {
+        type Target = [u8; 32];
+        fn deref(&self) -> &[u8; 32] {
+            &self.0
+        }
+    }
+
+    #[cfg(not(windows))]
+    impl DerefMut for KeyBuf {
+        fn deref_mut(&mut self) -> &mut [u8; 32] {
+            &mut self.0
+        }
+    }
+
+    impl Zeroize for KeyBuf {
+        fn zeroize(&mut self) {
+            self.deref_mut().zeroize();
+        }
+    }
+}
 
 #[derive(Default)]
 pub struct Vault {
@@ -40,7 +150,7 @@ fn derive(password: &str, salt: &[u8]) -> AppResult<Key> {
     // OWASP recommended Argon2id parameters: 19 MiB, 2 iterations, 1 lane.
     let params = Params::new(19 * 1024, 2, 1, Some(32)).map_err(|e| AppError::Other(e.to_string()))?;
     // Derived straight into its final place; argon2's zeroize feature wipes its working memory.
-    let mut key: Key = Box::new(Zeroizing::new([0u8; 32]));
+    let mut key = Key::new();
     Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
         .hash_password_into(password.as_bytes(), salt, &mut key[..])
         .map_err(|e| AppError::Other(e.to_string()))?;
@@ -125,6 +235,17 @@ impl Vault {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn key_memory_starts_zeroed_and_is_reusable() {
+        // Many lock/unlock cycles each take and release a page; a bad free would crash here.
+        for i in 0..2000u32 {
+            let mut k = Key::new();
+            assert_eq!(*k, [0u8; 32]);
+            k[..4].copy_from_slice(&i.to_le_bytes());
+            assert_eq!(k[..4], i.to_le_bytes());
+        }
+    }
 
     #[test]
     fn create_lock_unlock_roundtrip() {
