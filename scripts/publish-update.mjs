@@ -3,6 +3,7 @@
 // Signs a release package and publishes it to the BunnyCloud update server.
 //
 //   node scripts/publish-update.mjs --version=0.2.0 [--changelog=notes.md] [--draft] package.zip
+//   node scripts/publish-update.mjs --check    (only checks the secrets below; CI runs it before building)
 //
 // Reads from the environment (GitHub secrets in CI):
 //   UPDATE_SERVER_URL   server base URL
@@ -30,8 +31,6 @@ const args = Object.fromEntries(
     return [k, v.length ? v.join("=") : "1"];
   }),
 );
-const packagePath = process.argv.slice(2).find((a) => !a.startsWith("--")) ?? fail("Give the package zip.");
-const version = args.version ?? fail("Give --version=X.Y.Z.");
 const env = (name) => (process.env[name] ?? "").trim() || fail(`Set ${name}.`);
 const server = env("UPDATE_SERVER_URL").replace(/\/+$/, "");
 const expectedPublic = env("UPDATE_PUBLIC_KEY");
@@ -46,6 +45,13 @@ const publicRaw = createPublicKey(privateKey).export({ format: "der", type: "spk
 if (publicRaw.toString("base64") !== expectedPublic) {
   fail("The signing key does not match UPDATE_PUBLIC_KEY. Nothing was uploaded.");
 }
+if (args.check) {
+  console.log("The release secrets are set and the signing key matches UPDATE_PUBLIC_KEY.");
+  process.exit(0);
+}
+
+const packagePath = process.argv.slice(2).find((a) => !a.startsWith("--")) ?? fail("Give the package zip.");
+const version = args.version ?? fail("Give --version=X.Y.Z.");
 
 const data = readFileSync(packagePath);
 const sha256 = createHash("sha256").update(data).digest("hex");

@@ -31,6 +31,16 @@ jobs:
           fi
           echo "VERSION=$version" >> "$GITHUB_ENV"
 
+      # Fails in seconds on a missing or mismatched key instead of after the build.
+      - name: Check the release secrets
+        shell: bash
+        env:
+          UPDATE_SERVER_URL: ${{ secrets.UPDATE_SERVER_URL }}
+          UPDATE_PUBLIC_KEY: ${{ secrets.UPDATE_PUBLIC_KEY }}
+          US_SIGNING_KEY: ${{ secrets.US_SIGNING_KEY }}
+          US_TOKEN: ${{ secrets.US_TOKEN }}
+        run: node scripts/publish-update.mjs --check
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -41,6 +51,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          # Keep compiled dependencies even when a later step (e.g. publishing) fails.
+          cache-on-failure: true
 
       - name: Install frontend dependencies
         run: npm ci
