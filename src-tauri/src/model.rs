@@ -158,9 +158,9 @@ pub struct CredentialInput {
     pub credential: Credential,
     /// Password, or private key in OpenSSH/PEM format. `None` keeps the stored secret.
     #[serde(default)]
-    pub secret: Option<String>,
+    pub secret: Option<SecretString>,
     #[serde(default)]
-    pub passphrase: Option<String>,
+    pub passphrase: Option<SecretString>,
 }
 
 /// A string that is wiped from memory when dropped. Used for every decrypted secret.
@@ -279,4 +279,25 @@ pub struct Library {
     pub credentials: Vec<Credential>,
     pub tunnels: Vec<Tunnel>,
     pub snippets: Vec<Snippet>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Secrets saved before SecretString, and the UI's requests, must read and write the same.
+    #[test]
+    fn secret_strings_keep_their_json_shape() {
+        let json = r#"{"secret":"pw","passphrase":"pp"}"#;
+        let s: Secret = serde_json::from_str(json).unwrap();
+        assert_eq!((s.secret.as_str(), s.passphrase.as_deref().map(String::as_str)), ("pw", Some("pp")));
+        assert_eq!(serde_json::to_string(&s).unwrap(), json);
+
+        let input: CredentialInput = serde_json::from_str(
+            r#"{"credential":{"id":"","name":"n","kind":"password"},"secret":"pw"}"#,
+        )
+        .unwrap();
+        assert_eq!(input.secret.as_deref().map(String::as_str), Some("pw"));
+        assert!(input.passphrase.is_none());
+    }
 }

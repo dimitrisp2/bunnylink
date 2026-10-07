@@ -143,7 +143,8 @@ fn vault_status(state: State<AppState>) -> AppResult<VaultStatus> {
 }
 
 #[tauri::command]
-async fn vault_create(state: State<'_, AppState>, password: String, portable: bool) -> AppResult<()> {
+// Secrets sent by the UI arrive as SecretString, so they are wiped once handled.
+async fn vault_create(state: State<'_, AppState>, password: SecretString, portable: bool) -> AppResult<()> {
     state.touch();
     {
         let mut first_run = state.first_run.lock().unwrap();
@@ -159,7 +160,7 @@ async fn vault_create(state: State<'_, AppState>, password: String, portable: bo
 }
 
 #[tauri::command]
-async fn vault_unlock(state: State<'_, AppState>, password: String) -> AppResult<()> {
+async fn vault_unlock(state: State<'_, AppState>, password: SecretString) -> AppResult<()> {
     state.touch();
     state.vault.unlock(&state.store, &password)
 }
@@ -177,7 +178,7 @@ fn user_activity(state: State<AppState>) {
 
 // ---------------------------------------------------------------- import
 
-fn import_plan(app: &AppHandle, source: import::Source, path: Option<String>, password: Option<String>) -> AppResult<import::Plan> {
+fn import_plan(app: &AppHandle, source: import::Source, path: Option<String>, password: Option<SecretString>) -> AppResult<import::Plan> {
     let home = app.path().home_dir().map_err(|e| AppError::Invalid(format!("No home folder: {e}")))?;
     let path = path.map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
     match source {
@@ -189,7 +190,7 @@ fn import_plan(app: &AppHandle, source: import::Source, path: Option<String>, pa
         import::Source::Mremoteng => {
             let path = path.ok_or_else(|| AppError::Invalid("Choose an mRemoteNG connections file.".into()))?;
             let xml = std::fs::read_to_string(&path).map_err(|e| AppError::Invalid(format!("Could not read {path}: {e}")))?;
-            import::parse_mremoteng(&xml, password.as_deref().filter(|p| !p.is_empty()))
+            import::parse_mremoteng(&xml, password.as_ref().map(|p| p.as_str()).filter(|p| !p.is_empty()))
         }
     }
 }
@@ -199,7 +200,7 @@ async fn import_preview(
     app: AppHandle,
     source: import::Source,
     path: Option<String>,
-    password: Option<String>,
+    password: Option<SecretString>,
 ) -> AppResult<import::Preview> {
     tauri::async_runtime::spawn_blocking(move || Ok(import::preview(&import_plan(&app, source, path, password)?)))
         .await
@@ -211,7 +212,7 @@ async fn import_apply(
     app: AppHandle,
     source: import::Source,
     path: Option<String>,
-    password: Option<String>,
+    password: Option<SecretString>,
     keys: Option<import::KeyChoices>,
 ) -> AppResult<import::Applied> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -282,9 +283,9 @@ fn save_credential(state: State<AppState>, input: CredentialInput) -> AppResult<
     }
     cred.ask_passphrase &= cred.kind == CredentialKind::Key;
     // A passphrase asked for on every connection is never stored.
-    let passphrase = input.passphrase.filter(|p| !p.is_empty() && !cred.ask_passphrase).map(SecretString::from);
+    let passphrase = input.passphrase.filter(|p| !p.is_empty() && !cred.ask_passphrase);
     let secret = match input.secret {
-        Some(secret) => Some(Secret { secret: secret.into(), passphrase }),
+        Some(secret) => Some(Secret { secret, passphrase }),
         None if is_new && cred.kind != CredentialKind::Agent => {
             return Err(AppError::Invalid("Enter a password or private key.".into()))
         }
@@ -1045,7 +1046,7 @@ fn spawn_auto_lock(app: AppHandle) {
 // ---------------------------------------------------------------- passphrase prompts
 
 static APP: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
-static PROMPTS: Mutex<Option<HashMap<String, tokio::sync::oneshot::Sender<Option<String>>>>> = Mutex::new(None);
+static PROMPTS: Mutex<Option<HashMap<String, tokio::sync::oneshot::Sender<Option<SecretString>>>>> = Mutex::new(None);
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1058,7 +1059,7 @@ struct PassphraseRequest {
 }
 
 /// Asks the UI for a key passphrase and waits for the answer. `None` means cancelled.
-pub(crate) async fn ask_passphrase(host: &str, key: &str, retry: bool) -> Option<String> {
+pub(crate) async fn ask_passphrase(host: &str, key: &str, retry: bool) -> Option<SecretString> {
     let app = APP.get()?;
     let id = new_id();
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -1072,7 +1073,7 @@ pub(crate) async fn ask_passphrase(host: &str, key: &str, retry: bool) -> Option
 }
 
 #[tauri::command]
-fn passphrase_reply(id: String, passphrase: Option<String>) {
+fn passphrase_reply(id: String, passphrase: Option<SecretString>) {
     if let Some(tx) = PROMPTS.lock().unwrap().as_mut().and_then(|p| p.remove(&id)) {
         let _ = tx.send(passphrase);
     }

@@ -43,7 +43,7 @@ pub enum PSecret {
 
 /// What to do with a passphrase-protected key: save this passphrase, or (`None`) ask
 /// for it on every connection.
-pub type KeyChoices = HashMap<String, Option<String>>;
+pub type KeyChoices = HashMap<String, Option<SecretString>>;
 
 #[derive(Debug, Clone)]
 pub struct PFolder {
@@ -203,7 +203,7 @@ pub fn apply(store: &Store, vault: &Vault, source: Source, plan: Plan, keys: &Ke
             PSecret::Key { pem, label, path, encrypted } => {
                 let passphrase = if *encrypted { keys.get(path).cloned().flatten() } else { None };
                 ask_passphrase = *encrypted && passphrase.is_none();
-                (format!("key:{pem}"), label.clone(), CredentialKind::Key, Some(Secret { secret: pem.clone().into(), passphrase: passphrase.map(Into::into) }))
+                (format!("key:{pem}"), label.clone(), CredentialKind::Key, Some(Secret { secret: pem.clone().into(), passphrase }))
             }
         };
         if let Some(id) = creds.get(&dedupe) {

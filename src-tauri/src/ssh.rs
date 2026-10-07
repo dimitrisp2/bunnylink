@@ -166,14 +166,14 @@ type BoxFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + 
 /// How a key passphrase is asked for when a credential doesn't store it.
 pub trait Prompter: Send {
     /// `None` means the user cancelled. `retry` is set after a wrong passphrase.
-    fn passphrase<'a>(&'a mut self, host: &'a str, key: &'a str, retry: bool) -> BoxFuture<'a, Option<String>>;
+    fn passphrase<'a>(&'a mut self, host: &'a str, key: &'a str, retry: bool) -> BoxFuture<'a, Option<SecretString>>;
 }
 
 /// Asks in a dialog in the main window.
 pub struct DialogPrompter;
 
 impl Prompter for DialogPrompter {
-    fn passphrase<'a>(&'a mut self, host: &'a str, key: &'a str, retry: bool) -> BoxFuture<'a, Option<String>> {
+    fn passphrase<'a>(&'a mut self, host: &'a str, key: &'a str, retry: bool) -> BoxFuture<'a, Option<SecretString>> {
         Box::pin(crate::ask_passphrase(host, key, retry))
     }
 }
@@ -188,14 +188,15 @@ pub struct TerminalPrompter<'a, F: Fn(TermEvent) + Send + Sync> {
 }
 
 impl<F: Fn(TermEvent) + Send + Sync> Prompter for TerminalPrompter<'_, F> {
-    fn passphrase<'a>(&'a mut self, _host: &'a str, key: &'a str, retry: bool) -> BoxFuture<'a, Option<String>> {
+    fn passphrase<'a>(&'a mut self, _host: &'a str, key: &'a str, retry: bool) -> BoxFuture<'a, Option<SecretString>> {
         Box::pin(async move {
             let say = |text: String| (self.emit)(TermEvent::Prompt { text });
             if retry {
                 say("Wrong passphrase, try again.\r\n".into());
             }
             say(format!("Enter passphrase for key '{key}': "));
-            let mut line: Vec<u8> = Vec::new();
+            // Wiped when the prompt returns, like the passphrase built from it.
+            let mut line = zeroize::Zeroizing::new(Vec::<u8>::with_capacity(256));
             loop {
                 match self.input.recv().await {
                     Some(TermInput::Data(d)) => {
@@ -207,7 +208,7 @@ impl<F: Fn(TermEvent) + Send + Sync> Prompter for TerminalPrompter<'_, F> {
                             match b {
                                 b'\r' | b'\n' => {
                                     say("\r\n".into());
-                                    return Some(String::from_utf8_lossy(&line).into_owned());
+                                    return Some(String::from_utf8_lossy(&line).into_owned().into());
                                 }
                                 0x03 => {
                                     say("^C\r\n".into());
@@ -250,7 +251,7 @@ async fn ask_key(prompter: &mut dyn Prompter, pem: &str, host: &str, key_name: &
             .passphrase(host, key_name, attempt > 0)
             .await
             .ok_or_else(|| AppError::Other(format!("Cancelled: no passphrase for {key_name}.")))?;
-        if let Ok(key) = decode_secret_key(pem, Some(&passphrase)) {
+        if let Ok(key) = decode_secret_key(pem, Some(passphrase.as_str())) {
             return Ok(key);
         }
     }
