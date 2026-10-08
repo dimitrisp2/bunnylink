@@ -18,6 +18,7 @@
   import ContextMenu from "$lib/components/ContextMenu.svelte";
   import PassphrasePrompt from "$lib/components/PassphrasePrompt.svelte";
   import LoginPrompt from "$lib/components/LoginPrompt.svelte";
+  import BulkHostEditor from "$lib/components/BulkHostEditor.svelte";
   import Modal from "$lib/components/Modal.svelte";
   import CredentialForm from "$lib/components/CredentialForm.svelte";
   import Icon from "$lib/components/Icon.svelte";
@@ -158,6 +159,8 @@
     </Modal>
   {:else if app.modal?.kind === "import"}
     <ImportModal />
+  {:else if app.modal?.kind === "bulkHosts"}
+    <BulkHostEditor hostIds={app.modal.hostIds} />
   {:else if app.modal?.kind === "snippet"}
     <SnippetEditor snippet={app.modal.snippet} />
   {:else if app.modal?.kind === "snippetRun"}

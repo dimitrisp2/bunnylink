@@ -21,6 +21,7 @@ export type Modal =
   | { kind: "credential"; credential: Credential | null; onSaved?: (c: Credential) => void }
   | { kind: "tunnel"; tunnel: Tunnel | null; hostId?: string; targetPort?: number }
   | { kind: "import" }
+  | { kind: "bulkHosts"; hostIds: string[] }
   | { kind: "snippet"; snippet: Snippet | null }
   | { kind: "snippetRun"; snippet: Snippet; tabId: string; fields: Placeholder[]; values: Record<string, string> }
   | { kind: "confirm"; title: string; body: string; confirm: string; run: () => Promise<void> | void };
@@ -40,6 +41,8 @@ export const app = $state({
   library: { folders: [], hosts: [], credentials: [], tunnels: [], snippets: [] } as Library,
   settings: { theme: "dark", autoLockMinutes: 15, stayUnlockedWebConsole: true, stayUnlockedDesktop: true, stayUnlockedTransfer: true, keepSessionsWhenLocked: false,clipboardClearSeconds: 30, terminalFontSize: 14, fillPasswordPrompts: false, logSessions: false, logFolder: null, autoUpdate: true } as Settings,
   selectedHostId: null as string | null,
+  /** Hosts picked with Ctrl+click or Shift+click for a bulk edit; empty when only one is selected. */
+  selectedHostIds: [] as string[],
   sidebar: "hosts" as "hosts" | "tunnels" | "credentials" | "snippets",
   groupBy: "folders" as "folders" | "tags",
   tagFilter: null as string | null,

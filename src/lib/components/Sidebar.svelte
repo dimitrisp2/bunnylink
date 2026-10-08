@@ -5,7 +5,7 @@
   import type { Credential, Folder, Host, Snippet } from "../api";
   import { PROTOCOLS } from "../api";
   import {
-    app, allTags, credentialMenu, deleteCredential, folderById, hostActions, hostById, hostMenu, runSnippet, snippetApplies, snippetMenu,
+    app, allTags, credentialMenu, deleteCredential, folderById, hostActions, hostById, hostMenu, openMenu, runSnippet, snippetApplies, snippetMenu,
     snippetTab, toggleTunnel, tunnelMenu, tunnelSummary, showTab, HOME,
   } from "../state.svelte";
 
@@ -25,13 +25,63 @@
   const countIn = (f: Folder): number =>
     hostsIn(f.id).length + children(f.id).reduce((n, c) => n + countIn(c), 0);
 
+  /** Host ids in the order the list shows them (open folders only), for Shift+click ranges. */
+  function shownOrder(): string[] {
+    if (app.groupBy !== "folders") return visible.map((h) => h.id);
+    const out: string[] = [];
+    const walk = (parent: string | null) => {
+      for (const f of children(parent)) {
+        if ((q && countIn(f) === 0) || (app.collapsed[f.id] && !q)) continue;
+        walk(f.id);
+        out.push(...hostsIn(f.id).map((h) => h.id));
+      }
+    };
+    walk(null);
+    out.push(...hostsIn(null).map((h) => h.id));
+    return out;
+  }
+
+  /** The hosts picked for a bulk edit that still exist. */
+  const picked = $derived(app.selectedHostIds.filter((id) => hostById(id)));
+  const isSelected = (h: Host) => (picked.length > 1 ? picked.includes(h.id) : app.selectedHostId === h.id);
+  const editPicked = () => (app.modal = { kind: "bulkHosts", hostIds: picked });
+
   function select(e: MouseEvent, h: Host) {
+    // Ctrl+click adds or removes a host; Shift+click picks the range from the last click.
+    if (e.ctrlKey || e.metaKey) {
+      const ids = new Set(picked.length ? picked : app.selectedHostId ? [app.selectedHostId] : []);
+      if (ids.has(h.id)) ids.delete(h.id);
+      else ids.add(h.id);
+      app.selectedHostIds = [...ids];
+      app.selectedHostId = h.id;
+      return;
+    }
+    if (e.shiftKey && app.selectedHostId) {
+      const order = shownOrder();
+      const [a, b] = [order.indexOf(app.selectedHostId), order.indexOf(h.id)];
+      if (a >= 0 && b >= 0) {
+        app.selectedHostIds = order.slice(Math.min(a, b), Math.max(a, b) + 1);
+        return;
+      }
+    }
+    app.selectedHostIds = [];
     // Clicking the host already on show goes back to the welcome page. Only a single click:
     // the second click of a double-click (detail 2) keeps it selected for the connect.
     const shown = app.panes[app.focus] === HOME;
     app.selectedHostId = shown && e.detail === 1 && app.selectedHostId === h.id ? null : h.id;
     showTab(HOME, "left");
   }
+  function rowMenu(e: MouseEvent, h: Host) {
+    if (picked.length > 1 && picked.includes(h.id)) {
+      return openMenu(e, [
+        { label: `Edit ${picked.length} hosts…`, run: editPicked },
+        "separator",
+        { label: "Clear selection", run: () => (app.selectedHostIds = []) },
+      ]);
+    }
+    hostMenu(e, h);
+  }
+
   function primary(h: Host) {
     hostActions(h).find((a) => a.ready)?.run();
   }
@@ -57,12 +107,12 @@
 {#snippet hostRow(h: Host, depth: number)}
   <button
     class="row host"
-    class:sel={app.selectedHostId === h.id}
+    class:sel={isSelected(h)}
     style:padding-left="{12 + depth * 14}px"
     onclick={(e) => select(e, h)}
     ondblclick={() => primary(h)}
-    oncontextmenu={(e) => hostMenu(e, h)}
-    title="{h.address} — double-click to connect"
+    oncontextmenu={(e) => rowMenu(e, h)}
+    title="{h.address} — double-click to connect, Ctrl+click or Shift+click to select several"
   >
     <span class="dot" class:on={sessionOpen(h)}></span>
     <span class="name">{h.name}</span>
@@ -136,6 +186,13 @@
           {#each visible as h (h.id)}{@render hostRow(h, 0)}{/each}
         {/if}
         {#if visible.length === 0}<p class="none muted">No hosts match.</p>{/if}
+      {/if}
+      {#if picked.length > 1}
+        <div class="bulk">
+          <span class="grow">{picked.length} selected</span>
+          <button class="btn" onclick={editPicked}><Icon name="edit" size={13} /> Edit…</button>
+          <button class="icon-btn" title="Clear selection" onclick={() => (app.selectedHostIds = [])}><Icon name="x" size={13} /></button>
+        </div>
       {/if}
     </div>
   {:else if app.sidebar === "credentials"}
@@ -234,6 +291,8 @@
   .row { display: flex; align-items: center; gap: 7px; width: 100%; padding: 4px 10px 4px 12px; text-align: left; white-space: nowrap; }
   .row.host:hover { background: var(--panel-2); }
   .row.host.sel { background: var(--sel); }
+  .bulk { position: sticky; bottom: -12px; display: flex; align-items: center; gap: 6px; margin-top: 8px; padding: 8px 8px 8px 12px; background: var(--panel); border-top: 1px solid var(--line); font-size: 12px; }
+  .bulk .btn { padding: 3px 10px; }
   .name { overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
   .folder { color: var(--muted); font-weight: 600; font-size: 12px; gap: 4px; }
   .folder .fname { flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; }
