@@ -113,6 +113,20 @@
         <input id="set-clip" type="number" min="0" max="600" value={app.settings.clipboardClearSeconds}
           onchange={(e) => set("clipboardClearSeconds", Math.max(0, +e.currentTarget.value || 0))} />
       </label>
+      <div class="field">
+        <label class="check">
+          <input id="set-fill-password" type="checkbox" checked={app.settings.fillPasswordPrompts} onchange={(e) => set("fillPasswordPrompts", e.currentTarget.checked)} />
+          <span>Answer SSH password prompts with the saved password</span>
+        </label>
+        <small class="muted">
+          For servers that ask questions at login (keyboard-interactive), such as a password and then a one-time code.
+          {#if app.settings.fillPasswordPrompts}
+            The host's saved password answers the password prompt; you are asked for the rest.
+          {:else}
+            You are asked for every answer, including the password.
+          {/if}
+        </small>
+      </div>
       <div>
         <button class="btn" onclick={async () => { await attempt(() => api.vaultLock()); app.vault.unlocked = false; }}>
           <Icon name="lock" size={14} /> Lock now

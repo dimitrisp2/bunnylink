@@ -76,6 +76,8 @@ export interface Settings {
   keepSessionsWhenLocked: boolean;
   clipboardClearSeconds: number;
   terminalFontSize: number;
+  /** Answer SSH keyboard-interactive password prompts with the saved password. */
+  fillPasswordPrompts: boolean;
   autoUpdate: boolean;
 }
 /** A saved command. With no folders and no tags it applies to every host. */
@@ -146,6 +148,8 @@ export interface ImportPreview { hosts: ImportPreviewHost[]; folders: number; wa
 /** Per encrypted key file: the passphrase to save, or null to ask on every connection. */
 export type KeyChoices = Record<string, string | null>;
 export interface PassphraseRequest { id: string; host: string; key: string; retry: boolean }
+/** An SSH server asking keyboard-interactive questions, such as a one-time code. */
+export interface LoginRequest { id: string; host: string; name: string; instructions: string; prompts: { prompt: string; echo: boolean }[] }
 export interface ImportApplied { hosts: number; folders: number; credentials: number; rootFolderId: string }
 
 export const api = {
@@ -158,6 +162,7 @@ export const api = {
   updateCheck: () => invoke<void>("update_check"),
   updateInstall: () => invoke<void>("update_install"),
   passphraseReply: (id: string, passphrase: string | null) => invoke<void>("passphrase_reply", { id, passphrase }),
+  loginReply: (id: string, answers: string[] | null) => invoke<void>("login_reply", { id, answers }),
 
   library: () => invoke<Library>("get_library"),
   importPreview: (source: ImportSource, path: string | null, password: string | null) =>

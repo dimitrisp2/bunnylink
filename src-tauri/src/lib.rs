@@ -111,7 +111,8 @@ impl AppState {
             Some(j) => Some(Box::new(self.ssh_target(&j, depth + 1)?)),
             None => None,
         };
-        Ok(Target { label: host.name, address: host.address, port, username, auth, jump })
+        let fill_password_prompts = self.store.settings()?.fill_password_prompts;
+        Ok(Target { label: host.name, address: host.address, port, username, auth, fill_password_prompts, jump })
     }
 }
 
@@ -1103,6 +1104,38 @@ fn passphrase_reply(id: String, passphrase: Option<SecretString>) {
     }
 }
 
+static LOGIN_PROMPTS: Mutex<Option<HashMap<String, tokio::sync::oneshot::Sender<Option<Vec<SecretString>>>>>> = Mutex::new(None);
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LoginRequest<'a> {
+    id: String,
+    host: &'a str,
+    #[serde(flatten)]
+    questions: &'a ssh::LoginQuestions,
+}
+
+/// Asks the UI to answer an SSH server's keyboard-interactive questions (a one-time code,
+/// say) and waits. `None` means cancelled.
+pub(crate) async fn ask_login(host: &str, questions: &ssh::LoginQuestions) -> Option<Vec<SecretString>> {
+    let app = APP.get()?;
+    let id = new_id();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    LOGIN_PROMPTS.lock().unwrap().get_or_insert_with(HashMap::new).insert(id.clone(), tx);
+    if app.emit("login-request", LoginRequest { id: id.clone(), host, questions }).is_err() {
+        LOGIN_PROMPTS.lock().unwrap().as_mut()?.remove(&id);
+        return None;
+    }
+    rx.await.ok().flatten().filter(|a| a.len() == questions.prompts.len())
+}
+
+#[tauri::command]
+fn login_reply(id: String, answers: Option<Vec<SecretString>>) {
+    if let Some(tx) = LOGIN_PROMPTS.lock().unwrap().as_mut().and_then(|p| p.remove(&id)) {
+        let _ = tx.send(answers);
+    }
+}
+
 const DB_FILE: &str = "bunnylink.db";
 
 /// Where the database can live: the OS app-data folder, or next to the executable
@@ -1164,6 +1197,7 @@ pub fn run() {
             vault_lock,
             user_activity,
             passphrase_reply,
+            login_reply,
             update_status,
             update_check,
             update_install,

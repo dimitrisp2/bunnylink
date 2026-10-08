@@ -375,6 +375,7 @@ mod tests {
                 port: s[1].parse().unwrap(),
                 username: s[2].into(),
                 auth: ssh::Auth::Password(s[3].to_string().into()),
+                fill_password_prompts: false,
                 jump: None,
             };
             let mut notices = Vec::new();

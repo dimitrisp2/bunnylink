@@ -249,6 +249,10 @@ pub struct Settings {
     /// Clear copied credentials from the clipboard after this many seconds.
     pub clipboard_clear_seconds: u32,
     pub terminal_font_size: u16,
+    /// Answer an SSH server's keyboard-interactive password prompt with the host's saved
+    /// password. Off: every prompt is asked.
+    #[serde(default)]
+    pub fill_password_prompts: bool,
     /// Check for updates at startup and every 12 hours (official builds only).
     #[serde(default = "yes")]
     pub auto_update: bool,
@@ -269,6 +273,7 @@ impl Default for Settings {
             keep_sessions_when_locked: false,
             clipboard_clear_seconds: 30,
             terminal_font_size: 14,
+            fill_password_prompts: false,
             auto_update: true,
         }
     }

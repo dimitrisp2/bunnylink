@@ -7,9 +7,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use russh::client::{self, Handle, Msg, Session};
+use russh::client::{self, AuthResult, Handle, KeyboardInteractiveAuthResponse, Msg, Session};
 use russh::keys::{decode_secret_key, HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
-use russh::{Channel, ChannelMsg, Disconnect};
+use russh::{Channel, ChannelMsg, Disconnect, MethodKind, MethodSet};
 use serde::Serialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -37,6 +37,9 @@ pub struct Target {
     pub port: u16,
     pub username: String,
     pub auth: Auth,
+    /// Answer keyboard-interactive password prompts with the saved password instead of
+    /// asking. Other prompts (one-time codes) are always asked.
+    pub fill_password_prompts: bool,
     pub jump: Option<Box<Target>>,
 }
 
@@ -138,8 +141,9 @@ async fn open_agent() -> AppResult<(DynAgent, bool)> {
     }
 }
 
-/// Tries each key the agent holds until the server accepts one.
-async fn agent_auth(handle: &mut Handle<Client>, user: &str, label: &str) -> AppResult<bool> {
+/// Tries each key the agent holds until the server accepts one, or accepts one but
+/// asks for more (a second factor).
+async fn agent_auth(handle: &mut Handle<Client>, user: &str, label: &str) -> AppResult<AuthResult> {
     let (mut agent, pageant) = open_agent().await?;
     // Connecting to Pageant always succeeds; it only fails on the first request when
     // Pageant is not open.
@@ -150,23 +154,45 @@ async fn agent_auth(handle: &mut Handle<Client>, user: &str, label: &str) -> App
         return Err(AppError::Other("The SSH agent has no keys loaded. Add one with ssh-add.".into()));
     }
     let hash = handle.best_supported_rsa_hash().await?.flatten();
+    let mut last = AuthResult::Failure { remaining_methods: MethodSet::empty(), partial_success: false };
     for id in identities {
         let key = id.public_key().into_owned();
         match handle.authenticate_publickey_with(user, key, hash, &mut agent).await {
-            Ok(r) if r.success() => return Ok(true),
-            Ok(_) => continue,
+            Ok(r @ (AuthResult::Success | AuthResult::Failure { partial_success: true, .. })) => return Ok(r),
+            Ok(r) => last = r,
             Err(e) => return Err(AppError::Other(format!("SSH agent signing failed for {label}: {e:?}"))),
         }
     }
-    Ok(false)
+    Ok(last)
 }
 
 type BoxFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
 
-/// How a key passphrase is asked for when a credential doesn't store it.
+/// Questions a server asks during a keyboard-interactive login, such as a password
+/// or a one-time code.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoginQuestions {
+    pub name: String,
+    pub instructions: String,
+    pub prompts: Vec<LoginPrompt>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoginPrompt {
+    pub prompt: String,
+    /// The answer may be shown while typed (a username, not a password).
+    pub echo: bool,
+}
+
+/// How the user is asked for what a credential doesn't store: key passphrases and
+/// keyboard-interactive answers.
 pub trait Prompter: Send {
     /// `None` means the user cancelled. `retry` is set after a wrong passphrase.
     fn passphrase<'a>(&'a mut self, host: &'a str, key: &'a str, retry: bool) -> BoxFuture<'a, Option<SecretString>>;
+    /// One answer per prompt, or `None` when the user cancelled.
+    fn login<'a>(&'a mut self, host: &'a str, questions: &'a LoginQuestions) -> BoxFuture<'a, Option<Vec<SecretString>>>;
 }
 
 /// Asks in a dialog in the main window.
@@ -175,6 +201,10 @@ pub struct DialogPrompter;
 impl Prompter for DialogPrompter {
     fn passphrase<'a>(&'a mut self, host: &'a str, key: &'a str, retry: bool) -> BoxFuture<'a, Option<SecretString>> {
         Box::pin(crate::ask_passphrase(host, key, retry))
+    }
+
+    fn login<'a>(&'a mut self, host: &'a str, questions: &'a LoginQuestions) -> BoxFuture<'a, Option<Vec<SecretString>>> {
+        Box::pin(crate::ask_login(host, questions))
     }
 }
 
@@ -187,51 +217,82 @@ pub struct TerminalPrompter<'a, F: Fn(TermEvent) + Send + Sync> {
     pub size: (u32, u32),
 }
 
+impl<F: Fn(TermEvent) + Send + Sync> TerminalPrompter<'_, F> {
+    fn say(&self, text: impl Into<String>) {
+        (self.emit)(TermEvent::Prompt { text: text.into() })
+    }
+
+    /// Shows `prompt` and reads one line typed after it, echoed only when `echo` is set.
+    /// `None` means Ctrl+C or the tab was closed.
+    async fn read_line(&mut self, prompt: &str, echo: bool) -> Option<SecretString> {
+        self.say(prompt.replace('\n', "\r\n"));
+        // An echoed answer is redrawn with the prompt's last line after each keystroke.
+        let last_line = prompt.rsplit('\n').next().unwrap_or_default();
+        // Wiped when the prompt returns, like the answer built from it.
+        let mut line = zeroize::Zeroizing::new(Vec::<u8>::with_capacity(256));
+        loop {
+            match self.input.recv().await {
+                Some(TermInput::Data(d)) => {
+                    // Escape sequences (arrow keys and the like) arrive whole; skip them.
+                    if d.first() == Some(&0x1b) {
+                        continue;
+                    }
+                    for b in d {
+                        match b {
+                            b'\r' | b'\n' => {
+                                self.say("\r\n");
+                                return Some(String::from_utf8_lossy(&line).into_owned().into());
+                            }
+                            0x03 => {
+                                self.say("^C\r\n");
+                                return None;
+                            }
+                            0x7f | 0x08 => {
+                                // Drop one whole UTF-8 character.
+                                while let Some(last) = line.pop() {
+                                    if last & 0xC0 != 0x80 {
+                                        break;
+                                    }
+                                }
+                            }
+                            0x15 => line.clear(),
+                            b if b < 0x20 => {}
+                            b => line.push(b),
+                        }
+                    }
+                    if echo {
+                        self.say(format!("\r\x1b[K{last_line}{}", String::from_utf8_lossy(&line)));
+                    }
+                }
+                Some(TermInput::Resize { cols, rows }) => self.size = (cols, rows),
+                Some(TermInput::Close) | None => return None,
+            }
+        }
+    }
+}
+
 impl<F: Fn(TermEvent) + Send + Sync> Prompter for TerminalPrompter<'_, F> {
     fn passphrase<'a>(&'a mut self, _host: &'a str, key: &'a str, retry: bool) -> BoxFuture<'a, Option<SecretString>> {
         Box::pin(async move {
-            let say = |text: String| (self.emit)(TermEvent::Prompt { text });
             if retry {
-                say("Wrong passphrase, try again.\r\n".into());
+                self.say("Wrong passphrase, try again.\r\n");
             }
-            say(format!("Enter passphrase for key '{key}': "));
-            // Wiped when the prompt returns, like the passphrase built from it.
-            let mut line = zeroize::Zeroizing::new(Vec::<u8>::with_capacity(256));
-            loop {
-                match self.input.recv().await {
-                    Some(TermInput::Data(d)) => {
-                        // Escape sequences (arrow keys and the like) arrive whole; skip them.
-                        if d.first() == Some(&0x1b) {
-                            continue;
-                        }
-                        for b in d {
-                            match b {
-                                b'\r' | b'\n' => {
-                                    say("\r\n".into());
-                                    return Some(String::from_utf8_lossy(&line).into_owned().into());
-                                }
-                                0x03 => {
-                                    say("^C\r\n".into());
-                                    return None;
-                                }
-                                0x7f | 0x08 => {
-                                    // Drop one whole UTF-8 character.
-                                    while let Some(last) = line.pop() {
-                                        if last & 0xC0 != 0x80 {
-                                            break;
-                                        }
-                                    }
-                                }
-                                0x15 => line.clear(),
-                                b if b < 0x20 => {}
-                                b => line.push(b),
-                            }
-                        }
-                    }
-                    Some(TermInput::Resize { cols, rows }) => self.size = (cols, rows),
-                    Some(TermInput::Close) | None => return None,
+            self.read_line(&format!("Enter passphrase for key '{key}': "), false).await
+        })
+    }
+
+    fn login<'a>(&'a mut self, _host: &'a str, questions: &'a LoginQuestions) -> BoxFuture<'a, Option<Vec<SecretString>>> {
+        Box::pin(async move {
+            for text in [&questions.name, &questions.instructions] {
+                if !text.trim().is_empty() {
+                    self.say(format!("{}\r\n", text.trim_end().replace('\n', "\r\n")));
                 }
             }
+            let mut answers = Vec::with_capacity(questions.prompts.len());
+            for p in &questions.prompts {
+                answers.push(self.read_line(&p.prompt, p.echo).await?);
+            }
+            Some(answers)
         })
     }
 }
@@ -256,6 +317,53 @@ async fn ask_key(prompter: &mut dyn Prompter, pem: &str, host: &str, key_name: &
         }
     }
     Err(AppError::Other(format!("Wrong passphrase for the key of {host}.")))
+}
+
+/// Whether a keyboard-interactive prompt asks for the account password, not a code.
+fn is_password_prompt(prompt: &str) -> bool {
+    let p = prompt.to_lowercase();
+    p.contains("password") && !["code", "otp", "token", "pin", "verification", "new password"].iter().any(|w| p.contains(w))
+}
+
+/// Answers the server's keyboard-interactive questions until it accepts or refuses.
+/// The saved password fills one password prompt when the target allows it; everything
+/// else is asked through `prompter`. Waiting for the user is not timed.
+async fn keyboard_interactive(handle: &mut Handle<Client>, target: &Target, prompter: &mut dyn Prompter) -> AppResult<bool> {
+    let label = target.label.as_str();
+    let mut saved = match &target.auth {
+        Auth::Password(pw) if target.fill_password_prompts => Some(pw.clone()),
+        _ => None,
+    };
+    let mut reply = timed(label, async {
+        Ok(handle.authenticate_keyboard_interactive_start(target.username.clone(), None::<String>).await?)
+    })
+    .await?;
+    loop {
+        let (name, instructions, prompts) = match reply {
+            KeyboardInteractiveAuthResponse::Success => return Ok(true),
+            KeyboardInteractiveAuthResponse::Failure { .. } => return Ok(false),
+            KeyboardInteractiveAuthResponse::InfoRequest { name, instructions, prompts } => (name, instructions, prompts),
+        };
+        let answers: Vec<SecretString> = match &prompts[..] {
+            // Servers send empty rounds (for instance once PAM is satisfied); answer with nothing.
+            [] => Vec::new(),
+            [only] if !only.echo && is_password_prompt(&only.prompt) && saved.is_some() => saved.take().into_iter().collect(),
+            _ => {
+                let questions = LoginQuestions {
+                    name,
+                    instructions,
+                    prompts: prompts.into_iter().map(|p| LoginPrompt { prompt: p.prompt, echo: p.echo }).collect(),
+                };
+                prompter
+                    .login(label, &questions)
+                    .await
+                    .ok_or_else(|| AppError::Other(format!("Cancelled: the login to {label} was not completed.")))?
+            }
+        };
+        // russh takes plain strings; the copies it sends are not wiped.
+        let plain = answers.iter().map(|a| a.to_string()).collect();
+        reply = timed(label, async { Ok(handle.authenticate_keyboard_interactive_respond(plain).await?) }).await?;
+    }
 }
 
 /// Connects (through any jump hosts) and authenticates, asking for key passphrases in
@@ -334,9 +442,9 @@ fn connect_inner<'a>(
             }
         };
 
-        let ok = match &target.auth {
+        let first = match &target.auth {
             Auth::Password(pw) => {
-                timed(label, async { Ok(handle.authenticate_password(&target.username, pw.as_str()).await?.success()) }).await?
+                timed(label, async { Ok(handle.authenticate_password(&target.username, pw.as_str()).await?) }).await?
             }
             Auth::Agent => timed(label, agent_auth(&mut handle, &target.username, label)).await?,
             Auth::Key { pem, passphrase, ask } => {
@@ -352,13 +460,19 @@ fn connect_inner<'a>(
                 };
                 timed(label, async {
                     let hash = handle.best_supported_rsa_hash().await?.flatten();
-                    Ok(handle
-                        .authenticate_publickey(&target.username, PrivateKeyWithHashAlg::new(Arc::new(key), hash))
-                        .await?
-                        .success())
+                    Ok(handle.authenticate_publickey(&target.username, PrivateKeyWithHashAlg::new(Arc::new(key), hash)).await?)
                 })
                 .await?
             }
+        };
+        // The server may refuse a plain password (it takes keyboard-interactive only), or
+        // accept the key and ask for a one-time code next; both go on to keyboard-interactive.
+        let ok = match first {
+            AuthResult::Success => true,
+            AuthResult::Failure { remaining_methods, .. } if remaining_methods.contains(&MethodKind::KeyboardInteractive) => {
+                keyboard_interactive(&mut handle, target, prompter).await?
+            }
+            AuthResult::Failure { .. } => false,
         };
         if !ok {
             return Err(AppError::Other(format!(
@@ -642,6 +756,7 @@ mod tests {
             port: p.next()?.parse().ok()?,
             username: p.next()?.into(),
             auth: Auth::Password(p.next()?.to_string().into()),
+            fill_password_prompts: false,
             jump: None,
         })
     }
@@ -733,6 +848,138 @@ mod tests {
         assert!(seen.contains("term-42"), "terminal output: {seen}");
         tx.send(TermInput::Close).unwrap();
         term.await.unwrap();
+    }
+
+    #[test]
+    fn password_prompts_are_told_apart_from_codes() {
+        for p in ["Password: ", "user@host's password:", "(user@host) Password:"] {
+            assert!(is_password_prompt(p), "{p}");
+        }
+        for p in ["Verification code: ", "One-time password (OTP): ", "Enter PIN for token:", "New password: ", "Login: "] {
+            assert!(!is_password_prompt(p), "{p}");
+        }
+    }
+
+    /// A server that refuses plain passwords and asks for the password, then a one-time
+    /// code, through keyboard-interactive (like PAM with an authenticator app).
+    #[derive(Default)]
+    struct TwoFactorServer {
+        step: u8,
+    }
+
+    impl russh::server::Handler for TwoFactorServer {
+        type Error = russh::Error;
+
+        async fn auth_password(&mut self, _user: &str, _password: &str) -> Result<russh::server::Auth, Self::Error> {
+            let ki = MethodSet::from(&[MethodKind::KeyboardInteractive][..]);
+            Ok(russh::server::Auth::Reject { proceed_with_methods: Some(ki), partial_success: false })
+        }
+
+        async fn auth_keyboard_interactive<'a>(
+            &'a mut self,
+            _user: &str,
+            _submethods: &str,
+            response: Option<russh::server::Response<'a>>,
+        ) -> Result<russh::server::Auth, Self::Error> {
+            use std::borrow::Cow;
+            let answer = response.and_then(|mut r| r.next()).map(|b| String::from_utf8_lossy(&b).into_owned());
+            let ask = |prompt: &'static str| russh::server::Auth::Partial {
+                name: Cow::Borrowed(""),
+                instructions: Cow::Borrowed(""),
+                prompts: Cow::Owned(vec![(Cow::Borrowed(prompt), false)]),
+            };
+            self.step += 1;
+            Ok(match (self.step, answer.as_deref()) {
+                (1, None) => ask("Password: "),
+                (2, Some("secret")) => ask("Verification code: "),
+                (3, Some("123456")) => russh::server::Auth::Accept,
+                _ => russh::server::Auth::reject(),
+            })
+        }
+    }
+
+    /// Serves one connection with a fresh [`TwoFactorServer`]; returns the port.
+    async fn two_factor_server() -> u16 {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let key = russh::keys::PrivateKey::from(russh::keys::ssh_key::private::Ed25519Keypair::from_seed(&[7; 32]));
+        let config = Arc::new(russh::server::Config {
+            keys: vec![key],
+            methods: MethodSet::from(&[MethodKind::Password, MethodKind::KeyboardInteractive][..]),
+            auth_rejection_time: Duration::ZERO,
+            auth_rejection_time_initial: Some(Duration::ZERO),
+            ..Default::default()
+        });
+        tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            let _ = russh::server::run_stream(config, sock, TwoFactorServer::default()).await.unwrap().await;
+        });
+        port
+    }
+
+    /// Answers login questions from a list and remembers what was asked.
+    struct Scripted {
+        answers: Vec<&'static str>,
+        asked: Vec<String>,
+    }
+
+    impl Prompter for Scripted {
+        fn passphrase<'a>(&'a mut self, _: &'a str, _: &'a str, _: bool) -> BoxFuture<'a, Option<SecretString>> {
+            Box::pin(async { None })
+        }
+
+        fn login<'a>(&'a mut self, _: &'a str, q: &'a LoginQuestions) -> BoxFuture<'a, Option<Vec<SecretString>>> {
+            Box::pin(async move {
+                let mut out = Vec::new();
+                for p in &q.prompts {
+                    self.asked.push(p.prompt.clone());
+                    if self.answers.is_empty() {
+                        return None;
+                    }
+                    out.push(SecretString::from(self.answers.remove(0).to_string()));
+                }
+                Some(out)
+            })
+        }
+    }
+
+    async fn two_factor_login(fill: bool, answers: Vec<&'static str>) -> (AppResult<()>, Vec<String>) {
+        let port = two_factor_server().await;
+        let target = Target {
+            label: "2fa".into(),
+            address: "127.0.0.1".into(),
+            port,
+            username: "user".into(),
+            auth: Auth::Password("secret".to_string().into()),
+            fill_password_prompts: fill,
+            jump: None,
+        };
+        let mut prompter = Scripted { answers, asked: Vec::new() };
+        let store = Arc::new(Store::in_memory().unwrap());
+        let result = connect_with(&target, store, &mut Vec::new(), &mut prompter).await.map(|_| ());
+        (result, prompter.asked)
+    }
+
+    #[tokio::test]
+    async fn keyboard_interactive_fills_the_saved_password_and_asks_for_the_code() {
+        let (result, asked) = two_factor_login(true, vec!["123456"]).await;
+        result.unwrap();
+        assert_eq!(asked, ["Verification code: "]);
+    }
+
+    #[tokio::test]
+    async fn keyboard_interactive_asks_for_everything_by_default() {
+        let (result, asked) = two_factor_login(false, vec!["secret", "123456"]).await;
+        result.unwrap();
+        assert_eq!(asked, ["Password: ", "Verification code: "]);
+    }
+
+    #[tokio::test]
+    async fn keyboard_interactive_wrong_code_or_cancel_fails() {
+        let (result, _) = two_factor_login(true, vec!["000000"]).await;
+        assert!(result.unwrap_err().to_string().contains("rejected the login"));
+        let (result, _) = two_factor_login(true, vec![]).await;
+        assert!(result.unwrap_err().to_string().contains("Cancelled"));
     }
 
     /// Agent login, skipped unless `BUNNYLINK_TEST_SSH` and `SSH_AUTH_SOCK` are set and

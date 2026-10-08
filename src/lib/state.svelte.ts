@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, errorText, PROTOCOLS } from "./api";
-import type { Folder, Host, Library, PassphraseRequest, Protocol, Settings, Snippet, UpdateInfo, Theme, Transfer, Tunnel, TunnelStatus, VaultStatus, Credential } from "./api";
+import type { Folder, Host, Library, LoginRequest, PassphraseRequest, Protocol, Settings, Snippet, UpdateInfo, Theme, Transfer, Tunnel, TunnelStatus, VaultStatus, Credential } from "./api";
 
 export type TabKind = "terminal" | "command" | "files" | "desktop" | "settings";
 export type TabStatus = "connecting" | "open" | "closed" | "error";
@@ -34,7 +34,7 @@ export const app = $state({
   shownTheme: "dark" as "dark" | "light",
   vault: { initialized: false, unlocked: false, firstRun: false } as VaultStatus,
   library: { folders: [], hosts: [], credentials: [], tunnels: [], snippets: [] } as Library,
-  settings: { theme: "dark", autoLockMinutes: 15, stayUnlockedWebConsole: true, stayUnlockedDesktop: true, stayUnlockedTransfer: true, keepSessionsWhenLocked: false,clipboardClearSeconds: 30, terminalFontSize: 14, autoUpdate: true } as Settings,
+  settings: { theme: "dark", autoLockMinutes: 15, stayUnlockedWebConsole: true, stayUnlockedDesktop: true, stayUnlockedTransfer: true, keepSessionsWhenLocked: false,clipboardClearSeconds: 30, terminalFontSize: 14, fillPasswordPrompts: false, autoUpdate: true } as Settings,
   selectedHostId: null as string | null,
   sidebar: "hosts" as "hosts" | "tunnels" | "credentials" | "snippets",
   groupBy: "folders" as "folders" | "tags",
@@ -52,6 +52,8 @@ export const app = $state({
   update: { current: "", currentChangelog: "", status: { state: "unavailable" } } as UpdateInfo,
   /** Connections waiting for a key passphrase; the first one is shown. */
   passphrasePrompts: [] as PassphraseRequest[],
+  /** Connections waiting for answers to an SSH server's login questions; the first one is shown. */
+  loginPrompts: [] as LoginRequest[],
   toasts: [] as Toast[],
   tunnelState: {} as Record<string, { state: TunnelStatus["state"]; message?: string | null }>,
   transfers: {} as Record<string, Transfer>,
@@ -116,10 +118,15 @@ export async function boot() {
   await listen<PassphraseRequest>("passphrase-request", (e) => {
     app.passphrasePrompts.push(e.payload);
   });
+  await listen<LoginRequest>("login-request", (e) => {
+    app.loginPrompts.push(e.payload);
+  });
   await listen("vault-locked", () => {
     app.vault.unlocked = false;
     for (const r of app.passphrasePrompts) api.passphraseReply(r.id, null);
     app.passphrasePrompts = [];
+    for (const r of app.loginPrompts) api.loginReply(r.id, null);
+    app.loginPrompts = [];
     app.modal = null;
     app.menu = null;
     app.paletteOpen = false;

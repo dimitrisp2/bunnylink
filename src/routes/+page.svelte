@@ -17,6 +17,7 @@
   import Confirm from "$lib/components/Confirm.svelte";
   import ContextMenu from "$lib/components/ContextMenu.svelte";
   import PassphrasePrompt from "$lib/components/PassphrasePrompt.svelte";
+  import LoginPrompt from "$lib/components/LoginPrompt.svelte";
   import Modal from "$lib/components/Modal.svelte";
   import CredentialForm from "$lib/components/CredentialForm.svelte";
   import Icon from "$lib/components/Icon.svelte";
@@ -86,7 +87,7 @@
     } else if (e.ctrlKey && e.shiftKey && k === "w") {
       e.preventDefault();
       // Don't let the close confirmation replace an open editor or prompt.
-      if (app.modal || app.passphrasePrompts.length) return;
+      if (app.modal || app.passphrasePrompts.length || app.loginPrompts.length) return;
       const cur = app.panes[app.focus];
       if (cur && cur !== HOME) requestCloseTab(cur);
     } else if (e.ctrlKey && e.key === "\\") {
@@ -137,6 +138,10 @@
   {#if app.menu}<ContextMenu menu={app.menu} />{/if}
   {#each app.passphrasePrompts.slice(0, 1) as request (request.id)}
     <PassphrasePrompt {request} />
+  {:else}
+    {#each app.loginPrompts.slice(0, 1) as request (request.id)}
+      <LoginPrompt {request} />
+    {/each}
   {/each}
 
   {#key app.modal}
