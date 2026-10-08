@@ -108,7 +108,7 @@ export interface VaultStatus { initialized: boolean; unlocked: boolean; firstRun
 export type TermEvent =
   | { type: "notice"; text: string }
   | { type: "prompt"; text: string }
-  | { type: "data"; data: number[] }
+  | { type: "data"; data: Uint8Array }
   | { type: "exit"; code: number | null }
   | { type: "error"; message: string };
 export interface ExecResult { output: string; exitCode: number | null }
@@ -204,8 +204,9 @@ export const api = {
     invoke<void>("copy_credential", { hostId, field }),
 
   terminalOpen: (hostId: string, protocol: Protocol | undefined, cols: number, rows: number, onEvent: (e: TermEvent) => void) => {
-    const ch = new Channel<TermEvent>();
-    ch.onmessage = onEvent;
+    // Output arrives as raw bytes; everything else as JSON events.
+    const ch = new Channel<Exclude<TermEvent, { type: "data" }> | ArrayBuffer>();
+    ch.onmessage = (m) => onEvent(m instanceof ArrayBuffer ? { type: "data", data: new Uint8Array(m) } : m);
     return invoke<string>("terminal_open", { hostId, protocol, cols, rows, onEvent: ch });
   },
   serialPorts: () => invoke<string[]>("serial_ports"),

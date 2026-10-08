@@ -7,7 +7,7 @@
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use serde::Serialize;
 
@@ -18,7 +18,11 @@ use crate::ssh::TermEvent;
 pub struct SessionLog {
     path: PathBuf,
     out: BufWriter<File>,
+    last_flush: Instant,
 }
+
+/// Output reaches the disk at least this often; everything else is written at once.
+const FLUSH_EVERY: Duration = Duration::from_secs(1);
 
 impl SessionLog {
     /// Starts `<folder>/<host>_<date>_<time>.log`, creating the folder if needed.
@@ -33,7 +37,7 @@ impl SessionLog {
             n += 1;
             path = folder.join(format!("{stem}_{n}.log"));
         }
-        let mut log = SessionLog { out: BufWriter::new(File::create(&path)?), path };
+        let mut log = SessionLog { out: BufWriter::with_capacity(64 * 1024, File::create(&path)?), path, last_flush: Instant::now() };
         log.dim(&format!("BunnyLink session log: {host} ({protocol}), {}", now.format("%Y-%m-%d %H:%M:%S %:z")));
         Ok(log)
     }
@@ -53,8 +57,12 @@ impl SessionLog {
                 self.write(format!("\r\n\x1b[31m{message}\x1b[0m\r\n").as_bytes());
             }
         }
-        // Kept on disk as it arrives, so a crash loses nothing that was shown.
-        let _ = self.out.flush();
+        // A crash loses at most the last second of output; notices, prompts and the end
+        // of the session are on disk at once.
+        if !matches!(event, TermEvent::Data { .. }) || self.last_flush.elapsed() >= FLUSH_EVERY {
+            let _ = self.out.flush();
+            self.last_flush = Instant::now();
+        }
     }
 
     fn write(&mut self, data: &[u8]) {

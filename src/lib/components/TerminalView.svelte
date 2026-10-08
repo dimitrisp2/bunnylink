@@ -149,7 +149,7 @@
     switch (e.type) {
       case "data":
         if (live()?.status !== "open") setStatus("open");
-        term.write(new Uint8Array(e.data));
+        term.write(e.data);
         break;
       case "notice":
         term.write(`\x1b[2m${e.text}\x1b[0m\r\n`);

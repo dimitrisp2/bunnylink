@@ -469,7 +469,7 @@ fn terminal_open(
     protocol: Option<Protocol>,
     cols: u32,
     rows: u32,
-    on_event: Channel<TermEvent>,
+    on_event: Channel<InvokeResponseBody>,
 ) -> AppResult<String> {
     state.touch();
     let protocol = protocol.unwrap_or(Protocol::Ssh);
@@ -489,12 +489,13 @@ fn terminal_open(
             Err(e) => (None, Some(format!("Not logging this session: could not create a log in {}: {e}", folder.display()))),
         },
     };
+    let to_ui = terminal_forwarder(on_event);
     // The log lives in the sender, so it is finished when the session task ends.
     let send = move |e: TermEvent| {
         if let Some(log) = &log {
             log.lock().unwrap().record(&e);
         }
-        let _ = on_event.send(e);
+        let _ = to_ui.send(e);
     };
     if let Some(text) = log_error {
         send(TermEvent::Notice { text });
@@ -560,6 +561,57 @@ fn terminal_open(
     let _ = state.store.touch_host(&host_id, now());
     state.terminals.lock().unwrap().insert(session_id.clone(), tx);
     Ok(session_id)
+}
+
+/// Passes a terminal's events to the UI. Output goes as raw bytes, not a JSON array of
+/// numbers. While output is streaming, packets arriving within a few milliseconds are
+/// sent together, so a program printing line by line doesn't cost one message per line;
+/// a lone packet, such as the echo of a keystroke, goes out at once.
+fn terminal_forwarder(on_event: Channel<InvokeResponseBody>) -> mpsc::UnboundedSender<TermEvent> {
+    const WINDOW: Duration = Duration::from_millis(4);
+    const MAX_BATCH: usize = 256 * 1024;
+    let (tx, mut rx) = mpsc::unbounded_channel::<TermEvent>();
+    tauri::async_runtime::spawn(async move {
+        let mut held: Option<TermEvent> = None;
+        let mut last_output = tokio::time::Instant::now() - WINDOW;
+        loop {
+            let event = match held.take() {
+                Some(e) => e,
+                None => match rx.recv().await {
+                    Some(e) => e,
+                    None => break,
+                },
+            };
+            let TermEvent::Data { data: mut batch } = event else {
+                if let Ok(json) = serde_json::to_string(&event) {
+                    let _ = on_event.send(InvokeResponseBody::Json(json));
+                }
+                continue;
+            };
+            // Output right after other output is part of a stream: wait briefly for more.
+            let streaming = last_output.elapsed() < WINDOW;
+            let deadline = tokio::time::Instant::now() + if streaming { WINDOW } else { Duration::ZERO };
+            while batch.len() < MAX_BATCH {
+                let next = match rx.try_recv() {
+                    Ok(e) => Some(e),
+                    Err(_) if streaming => tokio::time::timeout_at(deadline, rx.recv()).await.ok().flatten(),
+                    Err(_) => None,
+                };
+                match next {
+                    Some(TermEvent::Data { data }) => batch.extend_from_slice(&data),
+                    // Anything else (an exit, a notice) goes after the output before it.
+                    Some(other) => {
+                        held = Some(other);
+                        break;
+                    }
+                    None => break,
+                }
+            }
+            last_output = tokio::time::Instant::now();
+            let _ = on_event.send(InvokeResponseBody::Raw(batch));
+        }
+    });
+    tx
 }
 
 fn protocol_name(p: Protocol) -> String {
