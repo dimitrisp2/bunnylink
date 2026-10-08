@@ -302,7 +302,9 @@
   });
 
   $effect(() => {
-    if (term) term.options.fontSize = app.settings.terminalFontSize;
+    if (!term) return;
+    term.options.fontSize = app.settings.terminalFontSize;
+    refit();
   });
 
   $effect(() => {
@@ -349,8 +351,10 @@
 
 <style>
   .wrap { position: relative; height: 100%; width: 100%; }
-  .term { height: 100%; width: 100%; padding: 6px 0 0 8px; background: var(--term-bg); overflow: hidden; }
-  .term :global(.xterm) { height: 100%; }
+  /* Rows sit at the bottom, so the leftover space under a whole row shows above the first line, not below the prompt. */
+  .term { height: 100%; width: 100%; display: flex; flex-direction: column; justify-content: flex-end; background: var(--term-bg); overflow: hidden; }
+  /* Padding goes on .xterm, not .term, so the fit addon subtracts it when counting rows. */
+  .term :global(.xterm) { padding: 6px 0 4px 8px; }
   .term :global(.xterm-viewport) { background: transparent !important; }
   .find { position: absolute; top: 8px; right: 18px; display: flex; align-items: center; gap: 4px; padding: 4px 6px 4px 10px; background: var(--panel); border: 1px solid var(--line-strong); border-radius: 7px; box-shadow: var(--shadow); color: var(--muted); z-index: 5; }
   .find input { width: 200px; padding: 3px 6px; }
