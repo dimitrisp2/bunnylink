@@ -32,6 +32,7 @@
           {/if}
           {#if t.kind === "command"}<Icon name="play" size={11} />{:else if t.kind === "files"}<Icon name="folder" size={11} />{:else if t.kind === "desktop"}<Icon name="monitor" size={11} />{/if}
           {t.title}
+          {#if t.bell}<span class="bell" title="The terminal rang its bell"><Icon name="bell" size={11} /></span>{/if}
           {#if paneOf(t.id) === "right"}<span class="side">R</span>{/if}
         </button>
         <button class="icon-btn small" title="Open on the right" onclick={() => splitRight(t.id)}><Icon name="split" size={12} /></button>
@@ -95,6 +96,7 @@
   .tab .small { width: 20px; height: 20px; visibility: hidden; }
   .tab:hover .small, .tab.act .small { visibility: visible; }
   .side { font: 600 9px var(--mono); color: var(--accent); }
+  .bell { display: grid; color: var(--accent); }
   .spacer { flex: 1; }
   .panes { display: grid; grid-template-columns: 1fr; min-height: 0; background: var(--panel); }
   .panes.split { grid-template-columns: 1fr 1fr; }

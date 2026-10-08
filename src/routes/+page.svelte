@@ -76,7 +76,8 @@
   }
 
   function onKey(e: KeyboardEvent) {
-    if (!app.vault.unlocked) return;
+    // Picking a suggestion from an input's list sends a keydown without a key.
+    if (!app.vault.unlocked || !e.key) return;
     const k = e.key.toLowerCase();
     const inTerminal = (e.target as HTMLElement)?.closest?.(".xterm");
     if (e.ctrlKey && k === "k" && (e.shiftKey || !inTerminal)) {

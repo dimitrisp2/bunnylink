@@ -8,14 +8,17 @@
   import Icon from "./Icon.svelte";
   import ReleaseNotes from "./ReleaseNotes.svelte";
   import { api } from "../api";
-  import type { KnownHost, LogFile, SessionLogs, Theme } from "../api";
+  import TerminalPreview from "./TerminalPreview.svelte";
+  import type { Bell, CursorStyle, KnownHost, LogFile, RightClick, SessionLogs, Theme } from "../api";
   import { app, attempt, openLog, restartToUpdate, saveSettings, toast } from "../state.svelte";
+  import { APP_SCHEME, BUILTIN_SCHEMES, SUGGESTED_FONTS, fontInstalled, playBell } from "../terminal";
 
   interface License { name: string; version: string; ecosystem: "rust" | "npm"; license: string; repository: string | null; texts: { file: string; text: number }[] }
 
-  type Section = "appearance" | "security" | "knownHosts" | "logs" | "licenses" | "updates" | "about";
+  type Section = "appearance" | "terminal" | "security" | "knownHosts" | "logs" | "licenses" | "updates" | "about";
   const sections: { id: Section; label: string }[] = [
     { id: "appearance", label: "Appearance" },
+    { id: "terminal", label: "Terminal" },
     { id: "security", label: "Security" },
     { id: "knownHosts", label: "Known hosts" },
     { id: "logs", label: "Session logs" },
@@ -32,6 +35,22 @@
     { id: "auto", label: "Auto" },
   ];
   const set = <K extends keyof typeof app.settings>(k: K, v: (typeof app.settings)[K]) => saveSettings({ ...app.settings, [k]: v });
+
+  const cursors: { id: CursorStyle; label: string }[] = [
+    { id: "block", label: "Block" },
+    { id: "bar", label: "Bar" },
+    { id: "underline", label: "Underline" },
+  ];
+  const bells: { id: Bell; label: string }[] = [
+    { id: "off", label: "Off" },
+    { id: "flash", label: "Flash" },
+    { id: "sound", label: "Sound" },
+  ];
+  function setBell(b: Bell) {
+    set("terminalBell", b);
+    if (b === "sound") playBell();
+  }
+  const fontMissing = $derived(!!app.settings.terminalFontFamily && !fontInstalled(app.settings.terminalFontFamily));
 
   // Open source: loaded the first time the section is opened.
   let licenses = $state<License[] | null>(null);
@@ -138,11 +157,90 @@
         </div>
         <small class="muted">Auto follows your operating system's light or dark mode.</small>
       </div>
-      <label class="field narrow">
-        <span>Terminal font size</span>
-        <input id="set-font" type="number" min="9" max="28" value={app.settings.terminalFontSize}
-          onchange={(e) => set("terminalFontSize", Math.min(28, Math.max(9, +e.currentTarget.value || 14)))} />
+    {:else if section === "terminal"}
+      <h1>Terminal</h1>
+      <div class="row">
+        <label class="field font">
+          <span>Font</span>
+          <input id="set-font-family" list="set-font-list" value={app.settings.terminalFontFamily ?? ""} placeholder="Default (Cascadia Mono, Consolas, …)"
+            autocomplete="off" spellcheck="false" onchange={(e) => set("terminalFontFamily", e.currentTarget.value.trim() || null)} />
+          <datalist id="set-font-list">
+            {#each SUGGESTED_FONTS as f (f)}<option value={f}></option>{/each}
+          </datalist>
+        </label>
+        <label class="field narrow">
+          <span>Size</span>
+          <input id="set-font" type="number" min="9" max="28" value={app.settings.terminalFontSize}
+            onchange={(e) => set("terminalFontSize", Math.min(28, Math.max(9, +e.currentTarget.value || 14)))} />
+        </label>
+        <label class="field">
+          <span>Line height</span>
+          <select id="set-line-height" value={app.settings.terminalLineHeight} onchange={(e) => set("terminalLineHeight", +e.currentTarget.value)}>
+            {#each [1, 1.1, 1.2, 1.3, 1.4, 1.5] as v (v)}<option value={v}>{v.toFixed(1)}</option>{/each}
+          </select>
+        </label>
+        <label class="field">
+          <span>Letter spacing</span>
+          <select id="set-letter-spacing" value={app.settings.terminalLetterSpacing} onchange={(e) => set("terminalLetterSpacing", +e.currentTarget.value)}>
+            {#each [0, 1, 2, 3] as v (v)}<option value={v}>{v} px</option>{/each}
+          </select>
+        </label>
+      </div>
+      {#if fontMissing}
+        <small class="err">“{app.settings.terminalFontFamily}” is not installed; the default font is used instead.</small>
+      {/if}
+      <label class="field scheme">
+        <span>Colour scheme</span>
+        <select id="set-scheme" value={app.settings.terminalScheme} onchange={(e) => set("terminalScheme", e.currentTarget.value)}>
+          <option value={APP_SCHEME}>Match app theme</option>
+          {#each BUILTIN_SCHEMES as s (s.id)}<option value={s.id}>{s.name}</option>{/each}
+        </select>
       </label>
+      <TerminalPreview />
+      <div class="field">
+        <span class="lbl">Cursor</span>
+        <div class="seg" role="radiogroup" aria-label="Cursor">
+          {#each cursors as c (c.id)}
+            <button class:act={app.settings.terminalCursor === c.id} onclick={() => set("terminalCursor", c.id)}>{c.label}</button>
+          {/each}
+        </div>
+        <label class="check">
+          <input id="set-cursor-blink" type="checkbox" checked={app.settings.terminalCursorBlink} onchange={(e) => set("terminalCursorBlink", e.currentTarget.checked)} />
+          <span>Blink</span>
+        </label>
+      </div>
+      <label class="field narrow">
+        <span>Scrollback lines</span>
+        <input id="set-scrollback" type="number" min="1000" max="1000000" step="1000" value={app.settings.terminalScrollback}
+          onchange={(e) => set("terminalScrollback", Math.min(1000000, Math.max(1000, Math.round(+e.currentTarget.value || 10000))))} />
+        <small class="muted">Applies to terminals opened after the change. More lines use more memory for every open terminal.</small>
+      </label>
+      <div class="field">
+        <label class="field scheme">
+          <span>Right-click</span>
+          <select id="set-right-click" value={app.settings.terminalRightClick} onchange={(e) => set("terminalRightClick", e.currentTarget.value as RightClick)}>
+            <option value="copyPaste">Copy the selection, or paste when nothing is selected</option>
+            <option value="paste">Paste</option>
+            <option value="menu">Show a menu</option>
+          </select>
+        </label>
+        <label class="check">
+          <input id="set-copy-select" type="checkbox" checked={app.settings.terminalCopyOnSelect} onchange={(e) => set("terminalCopyOnSelect", e.currentTarget.checked)} />
+          <span>Copy text as soon as it is selected</span>
+        </label>
+      </div>
+      <div class="field">
+        <span class="lbl">Bell</span>
+        <div class="seg" role="radiogroup" aria-label="Bell">
+          {#each bells as b (b.id)}
+            <button class:act={app.settings.terminalBell === b.id} onclick={() => setBell(b.id)}>{b.label}</button>
+          {/each}
+        </div>
+        <label class="check">
+          <input id="set-bell-tab" type="checkbox" checked={app.settings.terminalBellMarkTab} onchange={(e) => set("terminalBellMarkTab", e.currentTarget.checked)} />
+          <span>Mark the tab of a hidden terminal that rings its bell</span>
+        </label>
+      </div>
     {:else if section === "security"}
       <h1>Security</h1>
       <label class="field narrow">
@@ -394,6 +492,9 @@
   .field { display: grid; gap: 5px; max-width: 520px; }
   .field > span, .lbl { font-size: 11.5px; color: var(--muted); }
   .narrow input { max-width: 120px; }
+  .row { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; }
+  .font { flex: 1 1 240px; max-width: 360px; }
+  .scheme select { max-width: 420px; }
   .seg { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 7px; justify-self: start; }
   .seg button { padding: 5px 16px; border-radius: 5px; color: var(--muted); }
   .seg button.act { background: var(--accent); color: var(--accent-fg); font-weight: 600; }

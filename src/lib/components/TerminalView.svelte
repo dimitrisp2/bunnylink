@@ -12,6 +12,7 @@
   import { api, errorText } from "../api";
   import type { TermEvent } from "../api";
   import { app, registerSnippetTarget, toast, type Tab } from "../state.svelte";
+  import { isLight, playBell, terminalLook } from "../terminal";
 
   let { tab, visible }: { tab: Tab; visible: boolean } = $props();
   /** Replays a session log, read-only, instead of connecting. */
@@ -37,31 +38,8 @@
     if (t) t.status = s;
   };
 
-  // ANSI palettes tuned for contrast on each background.
-  const ANSI = {
-    dark: {
-      black: "#1b232b", red: "#ef7a6c", green: "#7fd39b", yellow: "#e8c06a", blue: "#6fa8f0", magenta: "#c79bf0", cyan: "#5fd0d2", white: "#d3dde6",
-      brightBlack: "#5c6b79", brightRed: "#ff9a8c", brightGreen: "#9be8b4", brightYellow: "#f5d58c", brightBlue: "#93c0ff", brightMagenta: "#dcb8ff", brightCyan: "#86e6e7", brightWhite: "#f4f7fa",
-    },
-    light: {
-      black: "#1d2833", red: "#b8322a", green: "#1d7a44", yellow: "#8a5d00", blue: "#1f5fbf", magenta: "#8a3fb3", cyan: "#0d7f86", white: "#c5ccd3",
-      brightBlack: "#5b6876", brightRed: "#d4483e", brightGreen: "#25924f", brightYellow: "#a87200", brightBlue: "#2f72d6", brightMagenta: "#a052cc", brightCyan: "#11959d", brightWhite: "#eef1f4",
-    },
-  };
-
-  function themeFromCss() {
-    const css = getComputedStyle(document.documentElement);
-    const v = (n: string) => css.getPropertyValue(n).trim();
-    const mode = document.documentElement.dataset.theme === "light" ? "light" : "dark";
-    return {
-      ...ANSI[mode],
-      background: v("--term-bg"),
-      foreground: v("--term-fg"),
-      cursor: v("--accent"),
-      cursorAccent: v("--term-bg"),
-      selectionBackground: v("--sel"),
-    };
-  }
+  const look = $derived(terminalLook(app.settings, app.shownTheme));
+  let flashing = $state(false);
 
   // The WebGL glyph atlas is shared between terminals and can go stale while this one is
   // hidden, so rebuild it and redraw every row.
@@ -77,7 +55,7 @@
   };
 
   function findOptions(incremental = false) {
-    const c = MATCH[app.shownTheme];
+    const c = MATCH[isLight(look.scheme.background) ? "light" : "dark"];
     const { caseSensitive, wholeWord, regex } = find;
     return {
       caseSensitive, wholeWord, regex, incremental,
@@ -139,10 +117,55 @@
     findInput?.focus();
   }
 
-  function applyTermTheme() {
-    term.options.theme = themeFromCss();
-    // The WebGL renderer caches glyphs per colour; redraw everything on the next frame.
-    requestAnimationFrame(redraw);
+  function onBell() {
+    const mode = app.settings.terminalBell;
+    if (mode === "sound") playBell();
+    else if (mode === "flash") {
+      flashing = false;
+      requestAnimationFrame(() => (flashing = true));
+    }
+    const t = live();
+    if (t && !visible && app.settings.terminalBellMarkTab) t.bell = true;
+  }
+
+  async function copySelection() {
+    const sel = term.getSelection();
+    if (sel) await writeText(sel);
+  }
+
+  async function paste() {
+    const t = await readText().catch(() => "");
+    if (t) term.paste(t);
+  }
+
+  async function onContextMenu(e: MouseEvent) {
+    e.preventDefault();
+    const sel = term.getSelection();
+    switch (app.settings.terminalRightClick) {
+      case "copyPaste":
+        if (sel) {
+          await writeText(sel);
+          term.clearSelection();
+        } else if (!viewer) await paste();
+        break;
+      case "paste":
+        if (!viewer) await paste();
+        break;
+      case "menu":
+        app.menu = {
+          x: e.clientX,
+          y: e.clientY,
+          items: [
+            { label: "Copy", disabled: !sel, run: () => copySelection().then(() => term.focus()) },
+            ...(viewer ? [] : [{ label: "Paste", run: () => paste().then(() => term.focus()) }]),
+            "separator",
+            { label: "Select all", run: () => (term.selectAll(), term.focus()) },
+            { label: "Find…", run: openFind },
+            ...(viewer ? [] : ["separator" as const, { label: "Clear scrollback", run: () => (term.clear(), term.focus()) }]),
+          ],
+        };
+        break;
+    }
   }
 
   function onEvent(e: TermEvent) {
@@ -197,14 +220,12 @@
 
   onMount(() => {
     term = new Terminal({
-      fontFamily: getComputedStyle(document.documentElement).getPropertyValue("--mono"),
-      fontSize: app.settings.terminalFontSize,
-      cursorBlink: !viewer,
+      ...look.options,
+      cursorBlink: !viewer && app.settings.terminalCursorBlink,
       // A log is shown whole, as far as memory allows.
-      scrollback: viewer ? 200000 : 10000,
+      scrollback: viewer ? 200000 : app.settings.terminalScrollback,
       disableStdin: viewer,
       allowProposedApi: true,
-      theme: themeFromCss(),
     });
     fit = new FitAddon();
     term.loadAddon(fit);
@@ -246,17 +267,14 @@
       }
       return true;
     });
-    // Right-click copies the selection, or pastes when nothing is selected.
-    el.addEventListener("contextmenu", async (e) => {
-      e.preventDefault();
-      const sel = term.getSelection();
-      if (sel) {
-        await writeText(sel);
-        term.clearSelection();
-      } else if (!viewer) {
-        const t = await readText().catch(() => "");
-        if (t) term.paste(t);
-      }
+    el.addEventListener("contextmenu", onContextMenu);
+    term.onBell(onBell);
+    // Copy on select: wait until the selection stops changing, as it does while dragging.
+    let selTimer: ReturnType<typeof setTimeout>;
+    term.onSelectionChange(() => {
+      if (!app.settings.terminalCopyOnSelect) return;
+      clearTimeout(selTimer);
+      selTimer = setTimeout(() => term.hasSelection() && copySelection(), 200);
     });
 
     term.onData((d) => {
@@ -293,6 +311,10 @@
 
   $effect(() => {
     if (visible && term) {
+      untrack(() => {
+        const t = live();
+        if (t?.bell) t.bell = false;
+      });
       requestAnimationFrame(() => {
         refit();
         redraw();
@@ -301,17 +323,20 @@
     }
   });
 
+  // Settings apply to open terminals straight away, except scrollback: xterm does not resize
+  // an open terminal's buffer to a new length until the next resize, which upsets scrolling.
   $effect(() => {
+    const { options } = look;
+    const blink = !viewer && app.settings.terminalCursorBlink;
     if (!term) return;
-    term.options.fontSize = app.settings.terminalFontSize;
-    refit();
-  });
-
-  $effect(() => {
-    void app.shownTheme;
-    if (term) applyTermTheme();
-    // Re-colour the highlights for the new theme.
-    untrack(() => term && find.open && findStep(1, true));
+    untrack(() => {
+      Object.assign(term.options, options, { cursorBlink: blink });
+      refit();
+      // The WebGL renderer caches glyphs per font and colour; redraw everything on the next frame.
+      requestAnimationFrame(redraw);
+      // Re-colour the search highlights for the new background.
+      if (find.open) findStep(1, true);
+    });
   });
 
   onDestroy(() => {
@@ -323,7 +348,8 @@
 </script>
 
 <div class="wrap">
-  <div class="term" bind:this={el}></div>
+  <div class="term" bind:this={el} style:background={look.scheme.background}></div>
+  {#if flashing}<div class="flash" onanimationend={() => (flashing = false)}></div>{/if}
   {#if find.open}
     <div class="find" role="search">
       <Icon name="search" size={13} />
@@ -356,6 +382,8 @@
   /* Padding goes on .xterm, not .term, so the fit addon subtracts it when counting rows. */
   .term :global(.xterm) { padding: 6px 0 4px 8px; }
   .term :global(.xterm-viewport) { background: transparent !important; }
+  .flash { position: absolute; inset: 0; pointer-events: none; background: var(--fg); opacity: 0; animation: flash 0.2s ease-out; }
+  @keyframes flash { from { opacity: 0.12; } to { opacity: 0; } }
   .find { position: absolute; top: 8px; right: 18px; display: flex; align-items: center; gap: 4px; padding: 4px 6px 4px 10px; background: var(--panel); border: 1px solid var(--line-strong); border-radius: 7px; box-shadow: var(--shadow); color: var(--muted); z-index: 5; }
   .find input { width: 200px; padding: 3px 6px; }
   .find .count { min-width: 64px; font-size: 11px; text-align: right; white-space: nowrap; }

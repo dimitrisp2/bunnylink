@@ -12,6 +12,8 @@ export interface Tab {
   id: string; kind: TabKind; hostId: string; title: string; status: TabStatus; protocol?: Protocol;
   /** Log tabs: the session log file shown. */
   logName?: string;
+  /** The terminal rang its bell while hidden; cleared when it is shown. */
+  bell?: boolean;
 }
 export type Pane = "left" | "right";
 
@@ -39,7 +41,9 @@ export const app = $state({
   shownTheme: "dark" as "dark" | "light",
   vault: { initialized: false, unlocked: false, firstRun: false } as VaultStatus,
   library: { folders: [], hosts: [], credentials: [], tunnels: [], snippets: [] } as Library,
-  settings: { theme: "dark", autoLockMinutes: 15, stayUnlockedWebConsole: true, stayUnlockedDesktop: true, stayUnlockedTransfer: true, keepSessionsWhenLocked: false,clipboardClearSeconds: 30, terminalFontSize: 14, fillPasswordPrompts: false, logSessions: false, logFolder: null, autoUpdate: true } as Settings,
+  settings: { theme: "dark", autoLockMinutes: 15, stayUnlockedWebConsole: true, stayUnlockedDesktop: true, stayUnlockedTransfer: true, keepSessionsWhenLocked: false, clipboardClearSeconds: 30, terminalFontSize: 14,
+    terminalFontFamily: null, terminalLineHeight: 1, terminalLetterSpacing: 0, terminalScheme: "app", terminalCursor: "block", terminalCursorBlink: true,
+    terminalScrollback: 10000, terminalRightClick: "copyPaste", terminalCopyOnSelect: false, terminalBell: "off", terminalBellMarkTab: true, fillPasswordPrompts: false, logSessions: false, logFolder: null, autoUpdate: true } as Settings,
   selectedHostId: null as string | null,
   /** Hosts picked with Ctrl+click or Shift+click for a bulk edit; empty when only one is selected. */
   selectedHostIds: [] as string[],

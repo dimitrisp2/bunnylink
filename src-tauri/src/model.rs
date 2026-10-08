@@ -275,6 +275,32 @@ pub struct Settings {
     /// Clear copied credentials from the clipboard after this many seconds.
     pub clipboard_clear_seconds: u32,
     pub terminal_font_size: u16,
+    /// Font name tried before the built-in monospace list; `None` uses the list alone.
+    #[serde(default)]
+    pub terminal_font_family: Option<String>,
+    #[serde(default = "one")]
+    pub terminal_line_height: f32,
+    /// Extra pixels between characters.
+    #[serde(default)]
+    pub terminal_letter_spacing: u8,
+    /// A built-in colour scheme's id; "app" follows the app theme.
+    #[serde(default = "app_scheme")]
+    pub terminal_scheme: String,
+    #[serde(default)]
+    pub terminal_cursor: CursorStyle,
+    #[serde(default = "yes")]
+    pub terminal_cursor_blink: bool,
+    #[serde(default = "scrollback")]
+    pub terminal_scrollback: u32,
+    #[serde(default)]
+    pub terminal_right_click: RightClick,
+    #[serde(default)]
+    pub terminal_copy_on_select: bool,
+    #[serde(default)]
+    pub terminal_bell: Bell,
+    /// Mark the tab of a terminal that rang its bell while hidden.
+    #[serde(default = "yes")]
+    pub terminal_bell_mark_tab: bool,
     /// Answer an SSH server's keyboard-interactive password prompt with the host's saved
     /// password. Off: every prompt is asked.
     #[serde(default)]
@@ -294,6 +320,46 @@ fn yes() -> bool {
     true
 }
 
+fn one() -> f32 {
+    1.0
+}
+
+fn app_scheme() -> String {
+    "app".into()
+}
+
+fn scrollback() -> u32 {
+    10_000
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CursorStyle {
+    #[default]
+    Block,
+    Bar,
+    Underline,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RightClick {
+    /// Copy the selection, or paste when nothing is selected.
+    #[default]
+    CopyPaste,
+    Paste,
+    Menu,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Bell {
+    #[default]
+    Off,
+    Flash,
+    Sound,
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -305,6 +371,17 @@ impl Default for Settings {
             keep_sessions_when_locked: false,
             clipboard_clear_seconds: 30,
             terminal_font_size: 14,
+            terminal_font_family: None,
+            terminal_line_height: 1.0,
+            terminal_letter_spacing: 0,
+            terminal_scheme: app_scheme(),
+            terminal_cursor: CursorStyle::Block,
+            terminal_cursor_blink: true,
+            terminal_scrollback: scrollback(),
+            terminal_right_click: RightClick::CopyPaste,
+            terminal_copy_on_select: false,
+            terminal_bell: Bell::Off,
+            terminal_bell_mark_tab: true,
             fill_password_prompts: false,
             log_sessions: false,
             log_folder: None,

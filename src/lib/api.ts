@@ -72,6 +72,10 @@ export type UpdateStatus =
   | { state: "ready"; version: string; changelog: string }
   | { state: "error"; message: string };
 export interface UpdateInfo { current: string; currentChangelog: string; status: UpdateStatus }
+export type CursorStyle = "block" | "bar" | "underline";
+/** copyPaste: copy the selection, or paste when nothing is selected. */
+export type RightClick = "copyPaste" | "paste" | "menu";
+export type Bell = "off" | "flash" | "sound";
 export interface Settings {
   theme: Theme;
   autoLockMinutes: number;
@@ -81,6 +85,21 @@ export interface Settings {
   keepSessionsWhenLocked: boolean;
   clipboardClearSeconds: number;
   terminalFontSize: number;
+  /** Tried before the built-in monospace fonts; null uses those alone. */
+  terminalFontFamily: string | null;
+  terminalLineHeight: number;
+  /** Extra pixels between characters. */
+  terminalLetterSpacing: number;
+  /** A built-in colour scheme's id; "app" follows the app theme. */
+  terminalScheme: string;
+  terminalCursor: CursorStyle;
+  terminalCursorBlink: boolean;
+  terminalScrollback: number;
+  terminalRightClick: RightClick;
+  terminalCopyOnSelect: boolean;
+  terminalBell: Bell;
+  /** Mark the tab of a terminal that rang its bell while hidden. */
+  terminalBellMarkTab: boolean;
   /** Answer SSH keyboard-interactive password prompts with the saved password. */
   fillPasswordPrompts: boolean;
   /** Log terminal sessions of hosts left at the default. */
