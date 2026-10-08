@@ -1191,7 +1191,10 @@ fn passphrase_reply(id: String, passphrase: Option<SecretString>) {
     }
 }
 
-static LOGIN_PROMPTS: Mutex<Option<HashMap<String, tokio::sync::oneshot::Sender<Option<Vec<SecretString>>>>>> = Mutex::new(None);
+/// Connections waiting for answers to an SSH server's login questions, by request id.
+type LoginReplies = HashMap<String, tokio::sync::oneshot::Sender<Option<Vec<SecretString>>>>;
+
+static LOGIN_PROMPTS: Mutex<Option<LoginReplies>> = Mutex::new(None);
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
