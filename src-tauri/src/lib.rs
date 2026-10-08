@@ -10,6 +10,7 @@ mod smbfs;
 mod model;
 mod net;
 mod serial;
+mod sessionlog;
 mod telnet;
 mod rdp;
 mod sftp;
@@ -42,6 +43,8 @@ struct AppState {
     /// First run only: the store is in memory until the vault is created, and these are
     /// the folders it can be saved to (app data, next to the executable).
     first_run: Mutex<Option<DbLocations>>,
+    /// The database's folder; session logs go under it unless the user picked a folder.
+    data_dir: Mutex<PathBuf>,
     vault: Vault,
     updater: Arc<updater::Updater>,
     terminals: Mutex<HashMap<String, mpsc::UnboundedSender<TermInput>>>,
@@ -60,6 +63,14 @@ impl AppState {
             .get(session_id)
             .cloned()
             .ok_or(AppError::Invalid("This file session has closed. Reopen the tab.".into()))
+    }
+
+    /// Where session logs are written.
+    fn log_folder(&self) -> AppResult<PathBuf> {
+        Ok(match self.store.settings()?.log_folder.filter(|f| !f.trim().is_empty()) {
+            Some(f) => PathBuf::from(f),
+            None => self.data_dir.lock().unwrap().join("Session logs"),
+        })
     }
 
     fn touch(&self) {
@@ -156,6 +167,7 @@ async fn vault_create(state: State<'_, AppState>, password: SecretString, portab
             std::fs::create_dir_all(dir)
                 .and_then(|_| state.store.persist(&dir.join(DB_FILE)).map_err(std::io::Error::other))
                 .map_err(|e| AppError::Invalid(format!("Can't create the database in {}: {e}", dir.display())))?;
+            *state.data_dir.lock().unwrap() = dir.clone();
             *first_run = None;
         }
     }
@@ -465,9 +477,28 @@ fn terminal_open(
     let session_id = new_id();
     let (tx, rx) = mpsc::unbounded_channel();
     let store = state.store.clone();
+    let log = match host.log_sessions {
+        LogMode::Always => true,
+        LogMode::Never => false,
+        LogMode::Default => state.store.settings()?.log_sessions,
+    };
+    let (log, log_error) = match log.then(|| state.log_folder()).transpose()? {
+        None => (None, None),
+        Some(folder) => match sessionlog::SessionLog::create(&folder, &host.name, &protocol_name(protocol)) {
+            Ok(l) => (Some(Mutex::new(l)), None),
+            Err(e) => (None, Some(format!("Not logging this session: could not create a log in {}: {e}", folder.display()))),
+        },
+    };
+    // The log lives in the sender, so it is finished when the session task ends.
     let send = move |e: TermEvent| {
+        if let Some(log) = &log {
+            log.lock().unwrap().record(&e);
+        }
         let _ = on_event.send(e);
     };
+    if let Some(text) = log_error {
+        send(TermEvent::Notice { text });
+    }
     match protocol {
         Protocol::Ssh => {
             let target = state.ssh_target(&host_id, 0)?;
@@ -529,6 +560,49 @@ fn terminal_open(
     let _ = state.store.touch_host(&host_id, now());
     state.terminals.lock().unwrap().insert(session_id.clone(), tx);
     Ok(session_id)
+}
+
+fn protocol_name(p: Protocol) -> String {
+    serde_json::to_value(p).ok().and_then(|v| v.as_str().map(str::to_uppercase)).unwrap_or_default()
+}
+
+// ---------------------------------------------------------------- session logs
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionLogs {
+    folder: String,
+    logs: Vec<sessionlog::LogFile>,
+}
+
+#[tauri::command]
+fn session_logs(state: State<AppState>) -> AppResult<SessionLogs> {
+    let folder = state.log_folder()?;
+    Ok(SessionLogs { logs: sessionlog::list(&folder)?, folder: folder.to_string_lossy().into_owned() })
+}
+
+/// The raw log, for the viewer to replay. Very large logs are cut to their last part.
+#[tauri::command]
+fn read_session_log(state: State<AppState>, name: String) -> AppResult<tauri::ipc::Response> {
+    use std::io::{Read, Seek, SeekFrom};
+    const MAX: u64 = 16 * 1024 * 1024;
+    state.touch();
+    let path = sessionlog::resolve(&state.log_folder()?, &name)?;
+    let unreadable = |e: std::io::Error| AppError::Invalid(format!("Could not read {name}: {e}"));
+    let mut file = std::fs::File::open(&path).map_err(unreadable)?;
+    let len = file.metadata().map_err(unreadable)?.len();
+    file.seek(SeekFrom::Start(len.saturating_sub(MAX))).map_err(unreadable)?;
+    let mut bytes = Vec::with_capacity(len.min(MAX) as usize);
+    file.read_to_end(&mut bytes).map_err(unreadable)?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
+#[tauri::command]
+fn delete_session_log(state: State<AppState>, name: String) -> AppResult<()> {
+    let path = sessionlog::resolve(&state.log_folder()?, &name)?;
+    std::fs::remove_file(&path).map_err(|e| AppError::Invalid(format!("Could not delete {name}: {e}")))?;
+    let _ = std::fs::remove_file(path.with_extension("txt"));
+    Ok(())
 }
 
 #[tauri::command]
@@ -1160,7 +1234,7 @@ struct DbLocations {
 
 /// Opens the existing database (next to the executable first), or on first run an
 /// in-memory store that `vault_create` saves once the user has chosen a location.
-fn open_store(app: &tauri::App) -> Result<(Store, Option<DbLocations>), Box<dyn std::error::Error>> {
+fn open_store(app: &tauri::App) -> Result<(Store, PathBuf, Option<DbLocations>), Box<dyn std::error::Error>> {
     let exe = std::env::current_exe()?;
     let locations = DbLocations {
         app_data: app.path().app_data_dir()?,
@@ -1169,10 +1243,11 @@ fn open_store(app: &tauri::App) -> Result<(Store, Option<DbLocations>), Box<dyn 
     for dir in [&locations.portable, &locations.app_data] {
         let path = dir.join(DB_FILE);
         if path.exists() {
-            return Ok((Store::open(&path)?, None));
+            return Ok((Store::open(&path)?, dir.clone(), None));
         }
     }
-    Ok((Store::in_memory()?, Some(locations)))
+    // Replaced by the folder the user picks when the vault is created.
+    Ok((Store::in_memory()?, locations.app_data.clone(), Some(locations)))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1185,10 +1260,11 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let (store, first_run) = open_store(app)?;
+            let (store, data_dir, first_run) = open_store(app)?;
             app.manage(AppState {
                 store: Arc::new(store),
                 first_run: Mutex::new(first_run),
+                data_dir: Mutex::new(data_dir),
                 vault: Vault::default(),
                 updater: Arc::new(updater::Updater::default()),
                 terminals: Mutex::new(HashMap::new()),
@@ -1231,6 +1307,9 @@ pub fn run() {
             forget_host_key,
             known_hosts,
             forget_known_host,
+            session_logs,
+            read_session_log,
+            delete_session_log,
             copy_credential,
             import_preview,
             import_apply,

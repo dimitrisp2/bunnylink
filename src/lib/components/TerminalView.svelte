@@ -14,6 +14,9 @@
   import { app, registerSnippetTarget, toast, type Tab } from "../state.svelte";
 
   let { tab, visible }: { tab: Tab; visible: boolean } = $props();
+  /** Replays a session log, read-only, instead of connecting. */
+  // svelte-ignore state_referenced_locally
+  const viewer = tab.kind === "log";
 
   let el: HTMLDivElement;
   let term: Terminal;
@@ -167,6 +170,17 @@
     }
   }
 
+  const LOG_LIMIT = 16 * 1024 * 1024;
+  async function loadLog() {
+    try {
+      const bytes = new Uint8Array(await api.readSessionLog(tab.logName!));
+      if (bytes.length >= LOG_LIMIT) term.write("\x1b[2mThis log is large; only its last 16 MB are shown.\x1b[0m\r\n");
+      term.write(bytes, () => term.scrollToTop());
+    } catch (e) {
+      term.write(`\x1b[31m${errorText(e)}\x1b[0m\r\n`);
+    }
+  }
+
   async function connect() {
     setStatus("connecting");
     try {
@@ -185,8 +199,10 @@
     term = new Terminal({
       fontFamily: getComputedStyle(document.documentElement).getPropertyValue("--mono"),
       fontSize: app.settings.terminalFontSize,
-      cursorBlink: true,
-      scrollback: 10000,
+      cursorBlink: !viewer,
+      // A log is shown whole, as far as memory allows.
+      scrollback: viewer ? 200000 : 10000,
+      disableStdin: viewer,
       allowProposedApi: true,
       theme: themeFromCss(),
     });
@@ -224,7 +240,7 @@
         if (sel) writeText(sel);
         return false;
       }
-      if (e.ctrlKey && e.shiftKey && k === "v") {
+      if (e.ctrlKey && e.shiftKey && k === "v" && !viewer) {
         readText().then((t) => t && term.paste(t));
         return false;
       }
@@ -237,13 +253,14 @@
       if (sel) {
         await writeText(sel);
         term.clearSelection();
-      } else {
+      } else if (!viewer) {
         const t = await readText().catch(() => "");
         if (t) term.paste(t);
       }
     });
 
     term.onData((d) => {
+      if (viewer) return;
       if (sessionId) api.terminalInput(sessionId, d);
       else if (d === "\r" && live()?.status !== "connecting") {
         term.reset();
@@ -255,6 +272,13 @@
       resizeTimer = setTimeout(() => sessionId && api.terminalResize(sessionId, cols, rows), 80);
     });
 
+    observer = new ResizeObserver(() => refit());
+    observer.observe(el);
+    if (viewer) {
+      loadLog();
+      return;
+    }
+
     // Snippets are typed in as if from the keyboard: each line ends with Enter.
     unregister = registerSnippetTarget(tab.id, {
       send: (text, enter) => {
@@ -263,9 +287,6 @@
       },
       focus: () => term.focus(),
     });
-
-    observer = new ResizeObserver(() => refit());
-    observer.observe(el);
 
     connect();
   });

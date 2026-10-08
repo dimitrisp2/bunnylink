@@ -21,13 +21,13 @@
   import Modal from "$lib/components/Modal.svelte";
   import CredentialForm from "$lib/components/CredentialForm.svelte";
   import Icon from "$lib/components/Icon.svelte";
-  import { app, toast, boot, afterUnlock, openSettings, quitNow, requestCloseTab, cycleTab, splitRight, unsplit, HOME } from "$lib/state.svelte";
+  import { app, toast, boot, afterUnlock, openSettings, quitNow, requestCloseTab, cycleTab, isLocalTab, splitRight, unsplit, HOME } from "$lib/state.svelte";
   import { api, errorText } from "$lib/api";
 
   let bootError = $state("");
   const locked = $derived(!app.vault.unlocked);
   // With the option on, a lock hides open tabs behind the lock screen instead of closing them.
-  const keepWhileLocked = $derived(app.settings.keepSessionsWhenLocked && app.tabs.some((t) => t.kind !== "settings"));
+  const keepWhileLocked = $derived(app.settings.keepSessionsWhenLocked && app.tabs.some((t) => !isLocalTab(t)));
   let appEl = $state<HTMLDivElement>();
   // Move focus off a hidden terminal or desktop, so nothing typed at the lock screen reaches it.
   $effect(() => {

@@ -235,6 +235,7 @@ pub fn apply(store: &Store, vault: &Vault, source: Source, plan: Plan, keys: &Ke
             pinned: false,
             last_used: None,
             forward_agent: false,
+            log_sessions: LogMode::Default,
         };
         host_ids.insert(h.key.clone(), host.id.clone());
         saved.push((host, h.jump.clone()));

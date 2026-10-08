@@ -305,6 +305,7 @@ mod tests {
             pinned: false,
             last_used: None,
             forward_agent: false,
+            log_sessions: LogMode::Default,
         }
     }
 

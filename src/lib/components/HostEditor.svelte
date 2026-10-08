@@ -194,6 +194,17 @@
     </div>
   {/if}
 
+  {#if has("ssh") || has("telnet") || has("serial")}
+    <label class="field log-mode">
+      <span>Session log</span>
+      <select id="host-log" bind:value={draft.logSessions}>
+        <option value="default">Use the setting ({app.settings.logSessions ? "logging" : "not logging"})</option>
+        <option value="always">Always log this host</option>
+        <option value="never">Never log this host</option>
+      </select>
+    </label>
+  {/if}
+
   <label class="field"><span>Notes</span><textarea id="host-notes" rows="3" bind:value={draft.notes} style="font-family: var(--ui); font-size: 13px"></textarea></label>
   {#if error}<p class="error">{error}</p>{/if}
 
@@ -219,5 +230,6 @@
   .row { display: flex; gap: 8px; }
   .check { display: flex; gap: 8px; align-items: center; cursor: pointer; }
   .check input { accent-color: var(--accent); }
+  .log-mode select { max-width: 280px; }
   .error { margin: 0; color: var(--bad); }
 </style>

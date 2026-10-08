@@ -38,7 +38,10 @@ export interface Host {
   lastUsed?: number | null;
   /** SSH: let the server use the local SSH agent's keys while connected. */
   forwardAgent: boolean;
+  /** Whether this host's terminal sessions are logged; "default" follows the setting. */
+  logSessions: LogMode;
 }
+export type LogMode = "default" | "always" | "never";
 export interface Effective {
   username?: string | null;
   credentialId?: string | null;
@@ -80,8 +83,14 @@ export interface Settings {
   terminalFontSize: number;
   /** Answer SSH keyboard-interactive password prompts with the saved password. */
   fillPasswordPrompts: boolean;
+  /** Log terminal sessions of hosts left at the default. */
+  logSessions: boolean;
+  /** Where logs go; null is the "Session logs" folder next to the database. */
+  logFolder: string | null;
   autoUpdate: boolean;
 }
+export interface LogFile { name: string; path: string; size: number; modified: number; cleanPath: string | null }
+export interface SessionLogs { folder: string; logs: LogFile[] }
 /** An SSH server key trusted on first connection. */
 export interface KnownHost { host: string; port: number; fingerprint: string }
 /** A saved command. With no folders and no tags it applies to every host. */
@@ -200,6 +209,10 @@ export const api = {
     return invoke<string>("terminal_open", { hostId, protocol, cols, rows, onEvent: ch });
   },
   serialPorts: () => invoke<string[]>("serial_ports"),
+  sessionLogs: () => invoke<SessionLogs>("session_logs"),
+  /** The raw log (its last 16 MB when larger), escape codes included. */
+  readSessionLog: (name: string) => invoke<ArrayBuffer>("read_session_log", { name }),
+  deleteSessionLog: (name: string) => invoke<void>("delete_session_log", { name }),
   terminalInput: (sessionId: string, data: string) => invoke<void>("terminal_input", { sessionId, data }),
   terminalResize: (sessionId: string, cols: number, rows: number) =>
     invoke<void>("terminal_resize", { sessionId, cols, rows }),

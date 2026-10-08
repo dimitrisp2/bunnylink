@@ -115,6 +115,19 @@ pub struct Host {
     /// SSH: let the server use the local SSH agent's keys while connected (agent forwarding).
     #[serde(default)]
     pub forward_agent: bool,
+    /// Whether this host's terminal sessions are logged.
+    #[serde(default)]
+    pub log_sessions: LogMode,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LogMode {
+    /// As the Session logs setting says.
+    #[default]
+    Default,
+    Always,
+    Never,
 }
 
 /// A host's settings after folder inheritance has been applied.
@@ -266,6 +279,12 @@ pub struct Settings {
     /// password. Off: every prompt is asked.
     #[serde(default)]
     pub fill_password_prompts: bool,
+    /// Log terminal sessions (SSH, Telnet, Serial) of hosts left at the default.
+    #[serde(default)]
+    pub log_sessions: bool,
+    /// Where session logs go; `None` is the "Session logs" folder next to the database.
+    #[serde(default)]
+    pub log_folder: Option<String>,
     /// Check for updates at startup and every 12 hours (official builds only).
     #[serde(default = "yes")]
     pub auto_update: bool,
@@ -287,6 +306,8 @@ impl Default for Settings {
             clipboard_clear_seconds: 30,
             terminal_font_size: 14,
             fill_password_prompts: false,
+            log_sessions: false,
+            log_folder: None,
             auto_update: true,
         }
     }

@@ -1,21 +1,24 @@
 <!-- SPDX-FileCopyrightText: 2026 BunnyCloud.IT -->
 <!-- SPDX-License-Identifier: GPL-3.0-or-later OR LicenseRef-BunnyCloud-Commercial -->
 <script lang="ts">
-  import { openUrl } from "@tauri-apps/plugin-opener";
+  import { untrack } from "svelte";
+  import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
   import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+  import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import Icon from "./Icon.svelte";
   import ReleaseNotes from "./ReleaseNotes.svelte";
   import { api } from "../api";
-  import type { KnownHost, Theme } from "../api";
-  import { app, attempt, restartToUpdate, saveSettings, toast } from "../state.svelte";
+  import type { KnownHost, LogFile, SessionLogs, Theme } from "../api";
+  import { app, attempt, openLog, restartToUpdate, saveSettings, toast } from "../state.svelte";
 
   interface License { name: string; version: string; ecosystem: "rust" | "npm"; license: string; repository: string | null; texts: { file: string; text: number }[] }
 
-  type Section = "appearance" | "security" | "knownHosts" | "licenses" | "updates" | "about";
+  type Section = "appearance" | "security" | "knownHosts" | "logs" | "licenses" | "updates" | "about";
   const sections: { id: Section; label: string }[] = [
     { id: "appearance", label: "Appearance" },
     { id: "security", label: "Security" },
     { id: "knownHosts", label: "Known hosts" },
+    { id: "logs", label: "Session logs" },
     { id: "licenses", label: "Open source" },
     { id: "updates", label: "Updates" },
     { id: "about", label: "About" },
@@ -76,6 +79,42 @@
     knownHosts = knownHosts?.filter((x) => x !== k) ?? null;
     toast(`Forgot the key of ${k.host}:${k.port}. The next connection trusts the key it is shown.`);
   }
+  // Session logs: listed each time the section is opened or the folder changes.
+  let logs = $state<SessionLogs | null>(null);
+  async function loadLogs() {
+    logs = (await attempt(() => api.sessionLogs())) ?? { folder: "", logs: [] };
+  }
+  $effect(() => {
+    void app.settings.logFolder;
+    if (section === "logs") untrack(loadLogs);
+  });
+  async function chooseLogFolder() {
+    const chosen = await openDialog({ directory: true, title: "Save session logs in", defaultPath: logs?.folder || undefined });
+    if (typeof chosen === "string") set("logFolder", chosen);
+  }
+  function deleteLog(l: LogFile) {
+    app.modal = {
+      kind: "confirm",
+      title: `Delete ${l.name}?`,
+      body: "The log and its plain-text copy are deleted from disk.",
+      confirm: "Delete log",
+      run: async () => {
+        await attempt(() => api.deleteSessionLog(l.name));
+        await loadLogs();
+      },
+    };
+  }
+  const fileSize = (n: number) => {
+    if (n < 1024) return `${n} B`;
+    const units = ["KB", "MB", "GB"];
+    let i = -1;
+    do {
+      n /= 1024;
+      i++;
+    } while (n >= 1024 && i < units.length - 1);
+    return `${n < 10 ? n.toFixed(1) : Math.round(n)} ${units[i]}`;
+  };
+
   async function copyFingerprint(k: KnownHost) {
     await attempt(() => writeText(k.fingerprint).then(() => toast("Fingerprint copied.")));
   }
@@ -196,6 +235,50 @@
           {/each}
         </div>
         <p class="muted count">{knownHosts.length} {knownHosts.length === 1 ? "key" : "keys"}</p>
+      {/if}
+    {:else if section === "logs"}
+      <h1>Session logs</h1>
+      <div class="field">
+        <label class="check">
+          <input id="set-log-sessions" type="checkbox" checked={app.settings.logSessions} onchange={(e) => set("logSessions", e.currentTarget.checked)} />
+          <span>Log terminal sessions <small class="muted">(SSH, Telnet and serial)</small></span>
+        </label>
+        <small class="muted">
+          A host can always or never be logged, whatever this says, in its settings. Each session is saved as a .log file
+          that replays with its colours here, and a plain-text .txt copy written when the session ends.
+        </small>
+        <small class="muted">
+          Logs are not encrypted. They hold everything the terminal showed, so anything printed on screen, such as a
+          secret shown by a command, ends up in them. Passwords typed at a prompt are not shown, so they are not logged.
+        </small>
+      </div>
+      <div class="field">
+        <span class="lbl">Folder</span>
+        <div class="log-folder">
+          <span class="mono path" title={logs?.folder}>{logs?.folder ?? "…"}</span>
+          <button class="btn" onclick={chooseLogFolder}>Change…</button>
+          {#if app.settings.logFolder}<button class="btn" onclick={() => set("logFolder", null)}>Use default</button>{/if}
+        </div>
+      </div>
+      {#if logs === null}
+        <p class="muted">Loading…</p>
+      {:else if logs.logs.length === 0}
+        <p class="muted">No session logs in this folder.</p>
+      {:else}
+        <div class="known">
+          {#each logs.logs as l (l.name)}
+            <div class="known-row log-row">
+              <button class="known-main log-open" title="View" onclick={() => openLog(l.name)}>
+                <span class="mono">{l.name}</span>
+                <small class="muted">{new Date(l.modified * 1000).toLocaleString()} · {fileSize(l.size)}</small>
+              </button>
+              <button class="btn" onclick={() => openLog(l.name)}>View</button>
+              <button class="btn" title="Show the plain-text copy in its folder" onclick={() => attempt(() => revealItemInDir(l.cleanPath ?? l.path))}>Show file</button>
+              <button class="icon-btn" title="Delete" onclick={() => deleteLog(l)}><Icon name="trash" size={14} /></button>
+            </div>
+          {/each}
+        </div>
+        <p class="muted count">{logs.logs.length} {logs.logs.length === 1 ? "log" : "logs"}</p>
       {/if}
     {:else if section === "about"}
       <h1 class="sr-only">About</h1>
@@ -348,6 +431,11 @@
   .fp { font-size: 11.5px; color: var(--muted); padding: 2px 4px; border-radius: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; text-align: left; }
   .fp:hover { background: var(--panel-2); color: var(--fg); }
   .empty { padding: 10px; }
+  .log-folder { display: flex; gap: 8px; align-items: center; min-width: 0; }
+  .log-folder .path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+  .log-row { grid-template-columns: minmax(0, 1fr) auto auto auto; }
+  .log-open { text-align: left; padding: 0; }
+  .log-open:hover .mono { color: var(--accent); }
   .licenses { display: grid; border: 1px solid var(--line); border-radius: 8px; }
   .lic { border-bottom: 1px solid var(--line); min-width: 0; }
   .lic:last-child { border-bottom: 0; }

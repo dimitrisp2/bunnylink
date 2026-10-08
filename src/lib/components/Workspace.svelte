@@ -27,7 +27,7 @@
         onauxclick={(e) => e.button === 1 && requestCloseTab(t.id)}
         oncontextmenu={(e) => tabMenu(e, t.id)}>
         <button class="label" onclick={() => showTab(t.id)} title={t.title}>
-          {#if t.kind === "settings"}<Icon name="settings" size={12} />{:else}
+          {#if t.kind === "settings"}<Icon name="settings" size={12} />{:else if t.kind === "log"}<Icon name="file" size={12} />{:else}
             <span class="dot" class:on={t.status === "open"} class:busy={t.status === "connecting"} class:err={t.status === "error"}></span>
           {/if}
           {#if t.kind === "command"}<Icon name="play" size={11} />{:else if t.kind === "files"}<Icon name="folder" size={11} />{:else if t.kind === "desktop"}<Icon name="monitor" size={11} />{/if}
@@ -64,7 +64,7 @@
         role="presentation"
         onmousedown={() => (app.focus = paneOf(t.id) ?? app.focus)}
       >
-        {#if t.kind === "terminal"}
+        {#if t.kind === "terminal" || t.kind === "log"}
           <TerminalView tab={t} visible={!!paneOf(t.id)} />
         {:else if t.kind === "desktop"}
           <RemoteDesktop tab={t} visible={!!paneOf(t.id)} />

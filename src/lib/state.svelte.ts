@@ -6,9 +6,13 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, errorText, PROTOCOLS } from "./api";
 import type { Folder, Host, Library, LoginRequest, PassphraseRequest, Protocol, Settings, Snippet, UpdateInfo, Theme, Transfer, Tunnel, TunnelStatus, VaultStatus, Credential } from "./api";
 
-export type TabKind = "terminal" | "command" | "files" | "desktop" | "settings";
+export type TabKind = "terminal" | "command" | "files" | "desktop" | "settings" | "log";
 export type TabStatus = "connecting" | "open" | "closed" | "error";
-export interface Tab { id: string; kind: TabKind; hostId: string; title: string; status: TabStatus; protocol?: Protocol }
+export interface Tab {
+  id: string; kind: TabKind; hostId: string; title: string; status: TabStatus; protocol?: Protocol;
+  /** Log tabs: the session log file shown. */
+  logName?: string;
+}
 export type Pane = "left" | "right";
 
 export type Modal =
@@ -34,7 +38,7 @@ export const app = $state({
   shownTheme: "dark" as "dark" | "light",
   vault: { initialized: false, unlocked: false, firstRun: false } as VaultStatus,
   library: { folders: [], hosts: [], credentials: [], tunnels: [], snippets: [] } as Library,
-  settings: { theme: "dark", autoLockMinutes: 15, stayUnlockedWebConsole: true, stayUnlockedDesktop: true, stayUnlockedTransfer: true, keepSessionsWhenLocked: false,clipboardClearSeconds: 30, terminalFontSize: 14, fillPasswordPrompts: false, autoUpdate: true } as Settings,
+  settings: { theme: "dark", autoLockMinutes: 15, stayUnlockedWebConsole: true, stayUnlockedDesktop: true, stayUnlockedTransfer: true, keepSessionsWhenLocked: false,clipboardClearSeconds: 30, terminalFontSize: 14, fillPasswordPrompts: false, logSessions: false, logFolder: null, autoUpdate: true } as Settings,
   selectedHostId: null as string | null,
   sidebar: "hosts" as "hosts" | "tunnels" | "credentials" | "snippets",
   groupBy: "folders" as "folders" | "tags",
@@ -212,6 +216,19 @@ export function openSettings() {
   showTab(tab.id, app.panes.right && app.focus === "right" ? "right" : "left");
 }
 
+/** Opens a session log in a read-only terminal, or switches to it when already open. */
+export function openLog(name: string) {
+  let tab = app.tabs.find((t) => t.kind === "log" && t.logName === name);
+  if (!tab) {
+    tab = { id: `t${++tabSeq}`, kind: "log", hostId: "", title: name.replace(/[.]log$/i, ""), status: "closed", logName: name };
+    app.tabs.push(tab);
+  }
+  showTab(tab.id, app.panes.right && app.focus === "right" ? "right" : "left");
+}
+
+/** Tabs that are not connections: Settings and log viewers. */
+export const isLocalTab = (t: Tab) => t.kind === "settings" || t.kind === "log";
+
 export function closeTab(id: string) {
   const idx = app.tabs.findIndex((t) => t.id === id);
   if (idx < 0) return;
@@ -317,7 +334,8 @@ export function reconnectTab(id: string) {
 }
 
 export function tabMenu(e: MouseEvent, id: string) {
-  if (app.tabs.find((t) => t.id === id)?.kind === "settings")
+  const tab = app.tabs.find((t) => t.id === id);
+  if (tab && isLocalTab(tab))
     return openMenu(e, [{ label: "Close", run: () => closeTab(id) }]);
   openMenu(e, [
     { label: "Duplicate", run: () => duplicateTab(id) },
@@ -638,6 +656,7 @@ export function newHost(folderId: string | null = null): Host {
     notes: "",
     pinned: false,
     forwardAgent: false,
+    logSessions: "default",
   };
 }
 
