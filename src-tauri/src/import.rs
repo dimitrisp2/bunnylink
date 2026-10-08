@@ -64,6 +64,8 @@ pub struct PHost {
     /// Key of the host to jump through.
     pub jump: Option<String>,
     pub notes: String,
+    /// SSH agent forwarding, from `ForwardAgent` on the host's own block.
+    pub forward_agent: bool,
 }
 
 #[derive(Debug, Default)]
@@ -234,7 +236,7 @@ pub fn apply(store: &Store, vault: &Vault, source: Source, plan: Plan, keys: &Ke
             notes: h.notes.clone(),
             pinned: false,
             last_used: None,
-            forward_agent: false,
+            forward_agent: h.forward_agent,
             log_sessions: LogMode::Default,
         };
         host_ids.insert(h.key.clone(), host.id.clone());
@@ -291,6 +293,8 @@ struct SshBlock {
     port: Option<u16>,
     identity: Option<String>,
     proxy_jump: Option<String>,
+    /// `ForwardAgent`: `no` is off; `yes` or an agent socket path is on.
+    forward_agent: Option<bool>,
 }
 
 fn read_ssh_config(path: &Path, home: &Path, depth: u8, out: &mut Vec<(Vec<String>, SshBlock)>) {
@@ -328,6 +332,10 @@ fn read_ssh_config(path: &Path, home: &Path, depth: u8, out: &mut Vec<(Vec<Strin
                         }
                         continue;
                     }
+                    "forwardagent" => {
+                        b.forward_agent.get_or_insert(!value.is_empty() && !value.eq_ignore_ascii_case("no"));
+                        continue;
+                    }
                     _ => continue,
                 };
             }
@@ -352,6 +360,17 @@ pub fn parse_openssh(path: &Path, home: &Path) -> AppResult<Plan> {
         }
     }
     let mut plan = Plan::default();
+    // Agent forwarding is only taken from a host's own block: under a pattern it would
+    // reach every host it matches, including ones the user trusts less.
+    let mut patterns_forwarding: Vec<&str> = blocks
+        .iter()
+        .filter(|(_, b)| b.forward_agent == Some(true))
+        .flat_map(|(patterns, _)| patterns.iter().filter(|p| wildcard(p)).map(String::as_str))
+        .collect();
+    patterns_forwarding.dedup();
+    for p in patterns_forwarding {
+        plan.warnings.push(format!("ForwardAgent under Host {p} was not imported; turn it on per host."));
+    }
     let mut keys_cache: HashMap<String, Option<PSecret>> = HashMap::new();
     let mut aliases: Vec<String> = vec![];
     for (patterns, b) in &blocks {
@@ -379,6 +398,7 @@ pub fn parse_openssh(path: &Path, home: &Path) -> AppResult<Plan> {
                 secret,
                 jump: None,
                 notes: String::new(),
+                forward_agent: b.forward_agent.unwrap_or(false),
             });
         }
     }
@@ -415,6 +435,7 @@ pub fn parse_openssh(path: &Path, home: &Path) -> AppResult<Plan> {
                     secret: Some(PSecret::Agent),
                     jump: None,
                     notes: "Jump host added by the OpenSSH import.".into(),
+                    forward_agent: false,
                 });
             }
             key
@@ -525,6 +546,7 @@ pub fn putty_plan(sessions: Vec<PuttySession>) -> Plan {
             secret,
             jump: None,
             notes: String::new(),
+            forward_agent: false,
         });
     }
     if plan.hosts.is_empty() {
@@ -764,6 +786,7 @@ pub fn parse_mremoteng(xml: &str, password: Option<&str>) -> AppResult<Plan> {
             secret,
             jump: None,
             notes: get("Descr").unwrap_or_default(),
+            forward_agent: false,
         });
     }
     if plan.hosts.is_empty() {
@@ -810,6 +833,27 @@ mod tests {
         let gw = &plan.hosts[4];
         assert_eq!((gw.username.as_deref(), gw.endpoints[0].port), (Some("admin"), Some(2200)));
         assert_eq!(plan.hosts[3].jump.as_deref(), Some("bastion"));
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn openssh_forward_agent_only_from_named_hosts() {
+        let home = tmp();
+        std::fs::write(
+            home.join(".ssh/config"),
+            "Host *\n  ForwardAgent yes\n\nHost build\n  HostName 10.0.5.20\n  ForwardAgent yes\n\nHost web\n  HostName 10.0.5.21\n\nHost db\n  ForwardAgent no\n\nHost lab-*\n  ForwardAgent yes\n\nHost sock\n  ForwardAgent ~/.ssh/agent.sock\n",
+        )
+        .unwrap();
+        let plan = parse_openssh(&home.join(".ssh/config"), &home).unwrap();
+        let forwarding: Vec<_> = plan.hosts.iter().map(|h| (h.name.as_str(), h.forward_agent)).collect();
+        assert_eq!(forwarding, [("build", true), ("web", false), ("db", false), ("sock", true)]);
+        assert_eq!(
+            plan.warnings,
+            [
+                "ForwardAgent under Host * was not imported; turn it on per host.",
+                "ForwardAgent under Host lab-* was not imported; turn it on per host.",
+            ]
+        );
         std::fs::remove_dir_all(home).unwrap();
     }
 
