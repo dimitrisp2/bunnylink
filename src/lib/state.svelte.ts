@@ -637,6 +637,7 @@ export function newHost(folderId: string | null = null): Host {
     overrides: {},
     notes: "",
     pinned: false,
+    forwardAgent: false,
   };
 }
 

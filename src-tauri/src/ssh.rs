@@ -40,6 +40,8 @@ pub struct Target {
     /// Answer keyboard-interactive password prompts with the saved password instead of
     /// asking. Other prompts (one-time codes) are always asked.
     pub fill_password_prompts: bool,
+    /// Let the server use the local SSH agent through terminals and commands.
+    pub forward_agent: bool,
     pub jump: Option<Box<Target>>,
 }
 
@@ -56,6 +58,8 @@ pub struct Client {
     check: Arc<Mutex<Option<KeyCheck>>>,
     /// Remote forwards: server-side port -> local destination.
     forwards: Arc<Mutex<HashMap<u32, (String, u16)>>>,
+    /// The user turned on agent forwarding for this host.
+    forward_agent: bool,
 }
 
 impl client::Handler for Client {
@@ -102,16 +106,50 @@ impl client::Handler for Client {
         }
         Ok(())
     }
+
+    /// The server opens one channel per use of the forwarded agent (an `ssh` or `git`
+    /// run on it); each is piped to a fresh connection to the local agent.
+    async fn server_channel_open_agent_forward(
+        &mut self,
+        channel: Channel<Msg>,
+        reply: client::ChannelOpenHandle,
+        _session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        // Only hosts the user chose may use the agent; dropping the reply refuses.
+        if !self.forward_agent {
+            return Ok(());
+        }
+        reply.accept().await;
+        tokio::spawn(async move {
+            if let Ok((agent, _)) = open_agent().await {
+                let mut local = agent.into_inner();
+                let mut stream = channel.into_stream();
+                let _ = tokio::io::copy_bidirectional(&mut local, &mut stream).await;
+            }
+        });
+        Ok(())
+    }
 }
 
 /// A live SSH connection. Holds the jump connection (if any) so it stays open.
 pub struct Conn {
     pub handle: Handle<Client>,
     forwards: Arc<Mutex<HashMap<u32, (String, u16)>>>,
+    /// Ask for agent forwarding on each terminal and command.
+    forward_agent: bool,
     _jump: Option<Box<Conn>>,
 }
 
 impl Conn {
+    /// Asks the server to offer our agent to what runs on `channel`, if the host allows it.
+    /// A server that refuses (AllowAgentForwarding no) leaves the session working without it.
+    async fn offer_agent(&self, channel: &Channel<Msg>) -> AppResult<()> {
+        if self.forward_agent {
+            channel.agent_forward(false).await?;
+        }
+        Ok(())
+    }
+
     pub async fn close(&self) {
         let _ = self.handle.disconnect(Disconnect::ByApplication, "", "en").await;
     }
@@ -404,6 +442,7 @@ fn connect_inner<'a>(
             port: target.port,
             check: check.clone(),
             forwards: forwards.clone(),
+            forward_agent: target.forward_agent,
         };
 
         let label = target.label.as_str();
@@ -480,7 +519,7 @@ fn connect_inner<'a>(
                 target.label, target.username
             )));
         }
-        Ok(Conn { handle, forwards, _jump: jump })
+        Ok(Conn { handle, forwards, forward_agent: target.forward_agent, _jump: jump })
     })
 }
 
@@ -577,6 +616,7 @@ pub async fn run_terminal(
 ) {
     let result: AppResult<Option<u32>> = async {
         let channel = conn.handle.channel_open_session().await?;
+        conn.offer_agent(&channel).await?;
         channel.request_pty(false, "xterm-256color", cols, rows, 0, 0, &[]).await?;
         channel.request_shell(false).await?;
         let (mut read, write) = channel.split();
@@ -619,6 +659,7 @@ pub struct ExecResult {
 
 pub async fn exec(conn: Conn, command: &str) -> AppResult<ExecResult> {
     let mut channel = conn.handle.channel_open_session().await?;
+    conn.offer_agent(&channel).await?;
     channel.exec(true, command).await?;
     let mut out = Vec::new();
     let mut exit_code = None;
@@ -757,6 +798,7 @@ mod tests {
             username: p.next()?.into(),
             auth: Auth::Password(p.next()?.to_string().into()),
             fill_password_prompts: false,
+            forward_agent: false,
             jump: None,
         })
     }
@@ -898,8 +940,8 @@ mod tests {
         }
     }
 
-    /// Serves one connection with a fresh [`TwoFactorServer`]; returns the port.
-    async fn two_factor_server() -> u16 {
+    /// Serves one connection with `handler`; returns the port.
+    async fn serve_once(handler: impl russh::server::Handler<Error = russh::Error> + Send + 'static) -> u16 {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let key = russh::keys::PrivateKey::from(russh::keys::ssh_key::private::Ed25519Keypair::from_seed(&[7; 32]));
@@ -912,9 +954,22 @@ mod tests {
         });
         tokio::spawn(async move {
             let (sock, _) = listener.accept().await.unwrap();
-            let _ = russh::server::run_stream(config, sock, TwoFactorServer::default()).await.unwrap().await;
+            let _ = russh::server::run_stream(config, sock, handler).await.unwrap().await;
         });
         port
+    }
+
+    fn local_target(port: u16, fill_password_prompts: bool, forward_agent: bool) -> Target {
+        Target {
+            label: "local".into(),
+            address: "127.0.0.1".into(),
+            port,
+            username: "user".into(),
+            auth: Auth::Password("secret".to_string().into()),
+            fill_password_prompts,
+            forward_agent,
+            jump: None,
+        }
     }
 
     /// Answers login questions from a list and remembers what was asked.
@@ -944,16 +999,7 @@ mod tests {
     }
 
     async fn two_factor_login(fill: bool, answers: Vec<&'static str>) -> (AppResult<()>, Vec<String>) {
-        let port = two_factor_server().await;
-        let target = Target {
-            label: "2fa".into(),
-            address: "127.0.0.1".into(),
-            port,
-            username: "user".into(),
-            auth: Auth::Password("secret".to_string().into()),
-            fill_password_prompts: fill,
-            jump: None,
-        };
+        let target = local_target(serve_once(TwoFactorServer::default()).await, fill, false);
         let mut prompter = Scripted { answers, asked: Vec::new() };
         let store = Arc::new(Store::in_memory().unwrap());
         let result = connect_with(&target, store, &mut Vec::new(), &mut prompter).await.map(|_| ());
@@ -980,6 +1026,66 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("rejected the login"));
         let (result, _) = two_factor_login(true, vec![]).await;
         assert!(result.unwrap_err().to_string().contains("Cancelled"));
+    }
+
+    /// A server that takes any password and answers each command with whether the
+    /// client asked for agent forwarding, and whether the client accepted the agent
+    /// channel the server then opened (it opens one even when not asked, like a
+    /// hostile server would).
+    #[derive(Default)]
+    struct AgentProbeServer {
+        requested: bool,
+    }
+
+    impl russh::server::Handler for AgentProbeServer {
+        type Error = russh::Error;
+
+        async fn auth_password(&mut self, _user: &str, _password: &str) -> Result<russh::server::Auth, Self::Error> {
+            Ok(russh::server::Auth::Accept)
+        }
+
+        async fn channel_open_session(
+            &mut self,
+            _channel: Channel<russh::server::Msg>,
+            reply: russh::server::ChannelOpenHandle,
+            _session: &mut russh::server::Session,
+        ) -> Result<(), Self::Error> {
+            reply.accept().await;
+            Ok(())
+        }
+
+        async fn agent_request(&mut self, _channel: russh::ChannelId, _session: &mut russh::server::Session) -> Result<bool, Self::Error> {
+            self.requested = true;
+            Ok(true)
+        }
+
+        async fn exec_request(&mut self, channel: russh::ChannelId, _data: &[u8], session: &mut russh::server::Session) -> Result<(), Self::Error> {
+            session.channel_success(channel)?;
+            let handle = session.handle();
+            let requested = self.requested;
+            // Not awaited here: the session loop that delivers the client's answer is
+            // the one running this handler.
+            tokio::spawn(async move {
+                let accepted = handle.channel_open_agent().await.is_ok();
+                let _ = handle.data(channel, format!("requested={requested} accepted={accepted}").into_bytes()).await;
+                let _ = handle.exit_status_request(channel, 0).await;
+                let _ = handle.eof(channel).await;
+                let _ = handle.close(channel).await;
+            });
+            Ok(())
+        }
+    }
+
+    async fn agent_probe(forward_agent: bool) -> String {
+        let target = local_target(serve_once(AgentProbeServer::default()).await, false, forward_agent);
+        let conn = connect(&target, Arc::new(Store::in_memory().unwrap()), &mut Vec::new()).await.unwrap();
+        exec(conn, "true").await.unwrap().output
+    }
+
+    #[tokio::test]
+    async fn agent_forwarding_only_when_the_host_allows_it() {
+        assert_eq!(agent_probe(true).await, "requested=true accepted=true");
+        assert_eq!(agent_probe(false).await, "requested=false accepted=false");
     }
 
     /// Agent login, skipped unless `BUNNYLINK_TEST_SSH` and `SSH_AUTH_SOCK` are set and

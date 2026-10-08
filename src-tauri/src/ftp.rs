@@ -375,6 +375,7 @@ mod tests {
                 username: s[2].into(),
                 auth: ssh::Auth::Password(s[3].to_string().into()),
                 fill_password_prompts: false,
+                forward_agent: false,
                 jump: None,
             };
             let via = FtpTarget { jump: Some(jump), ..target.clone() };

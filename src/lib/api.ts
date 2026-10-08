@@ -36,6 +36,8 @@ export interface Host {
   notes: string;
   pinned: boolean;
   lastUsed?: number | null;
+  /** SSH: let the server use the local SSH agent's keys while connected. */
+  forwardAgent: boolean;
 }
 export interface Effective {
   username?: string | null;

@@ -112,6 +112,9 @@ pub struct Host {
     pub pinned: bool,
     #[serde(default)]
     pub last_used: Option<i64>,
+    /// SSH: let the server use the local SSH agent's keys while connected (agent forwarding).
+    #[serde(default)]
+    pub forward_agent: bool,
 }
 
 /// A host's settings after folder inheritance has been applied.

@@ -181,6 +181,19 @@
     {/if}
   </div>
 
+  {#if has("ssh")}
+    <div class="field">
+      <label class="check">
+        <input id="host-forward-agent" type="checkbox" bind:checked={draft.forwardAgent} />
+        <span>Forward SSH agent</span>
+      </label>
+      <small class="muted">
+        Commands on this host (git, ssh to another server) can use the keys in your local SSH agent, without copying them.
+        Only turn this on for hosts you trust: anyone with root there can use your keys while you are connected.
+      </small>
+    </div>
+  {/if}
+
   <label class="field"><span>Notes</span><textarea id="host-notes" rows="3" bind:value={draft.notes} style="font-family: var(--ui); font-size: 13px"></textarea></label>
   {#if error}<p class="error">{error}</p>{/if}
 
@@ -204,5 +217,7 @@
   .serial select { padding: 4px 24px 4px 6px; }
   .port input { padding: 4px 6px; }
   .row { display: flex; gap: 8px; }
+  .check { display: flex; gap: 8px; align-items: center; cursor: pointer; }
+  .check input { accent-color: var(--accent); }
   .error { margin: 0; color: var(--bad); }
 </style>

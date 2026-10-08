@@ -112,7 +112,8 @@ impl AppState {
             None => None,
         };
         let fill_password_prompts = self.store.settings()?.fill_password_prompts;
-        Ok(Target { label: host.name, address: host.address, port, username, auth, fill_password_prompts, jump })
+        let forward_agent = host.forward_agent;
+        Ok(Target { label: host.name, address: host.address, port, username, auth, fill_password_prompts, forward_agent, jump })
     }
 }
 

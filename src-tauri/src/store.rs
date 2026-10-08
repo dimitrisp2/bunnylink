@@ -298,6 +298,7 @@ mod tests {
             notes: String::new(),
             pinned: false,
             last_used: None,
+            forward_agent: false,
         }
     }
 
