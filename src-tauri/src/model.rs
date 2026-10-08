@@ -223,6 +223,16 @@ pub struct Snippet {
     pub tags: Vec<String>,
 }
 
+/// An SSH server key trusted on first connection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KnownHost {
+    pub host: String,
+    pub port: u16,
+    /// SHA-256 fingerprint, as `ssh-keygen -l` prints it.
+    pub fingerprint: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Theme {

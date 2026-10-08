@@ -2,18 +2,20 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later OR LicenseRef-BunnyCloud-Commercial -->
 <script lang="ts">
   import { openUrl } from "@tauri-apps/plugin-opener";
+  import { writeText } from "@tauri-apps/plugin-clipboard-manager";
   import Icon from "./Icon.svelte";
   import ReleaseNotes from "./ReleaseNotes.svelte";
   import { api } from "../api";
-  import type { Theme } from "../api";
-  import { app, attempt, restartToUpdate, saveSettings } from "../state.svelte";
+  import type { KnownHost, Theme } from "../api";
+  import { app, attempt, restartToUpdate, saveSettings, toast } from "../state.svelte";
 
   interface License { name: string; version: string; ecosystem: "rust" | "npm"; license: string; repository: string | null; texts: { file: string; text: number }[] }
 
-  type Section = "appearance" | "security" | "licenses" | "updates" | "about";
+  type Section = "appearance" | "security" | "knownHosts" | "licenses" | "updates" | "about";
   const sections: { id: Section; label: string }[] = [
     { id: "appearance", label: "Appearance" },
     { id: "security", label: "Security" },
+    { id: "knownHosts", label: "Known hosts" },
     { id: "licenses", label: "Open source" },
     { id: "updates", label: "Updates" },
     { id: "about", label: "About" },
@@ -44,6 +46,39 @@
       .catch(() => (licenseError = "The license list is not available in this build."));
   });
   const keyOf = (l: License) => `${l.ecosystem}:${l.name}@${l.version}`;
+
+  // Known hosts: loaded each time the section is opened, so new keys show up.
+  let knownHosts = $state<KnownHost[] | null>(null);
+  let knownFilter = $state("");
+  async function loadKnownHosts() {
+    knownHosts = (await attempt(() => api.knownHosts())) ?? [];
+  }
+  $effect(() => {
+    if (section === "knownHosts") loadKnownHosts();
+  });
+  /** Saved hosts that connect to this address and SSH port. */
+  const hostsUsing = (k: KnownHost) =>
+    app.library.hosts.filter((h) => {
+      if (h.address.trim().toLowerCase() !== k.host.toLowerCase()) return false;
+      const ssh = h.endpoints.filter((e) => e.protocol === "ssh" || e.protocol === "sftp");
+      // A host used only as a jump host may have no SSH endpoint; it connects on 22.
+      return ssh.length ? ssh.some((e) => (e.port || 22) === k.port) : k.port === 22;
+    });
+  const shownKnownHosts = $derived.by(() => {
+    const q = knownFilter.trim().toLowerCase();
+    if (!knownHosts || !q) return knownHosts ?? [];
+    return knownHosts.filter(
+      (k) => `${k.host}:${k.port}`.toLowerCase().includes(q) || k.fingerprint.toLowerCase().includes(q) || hostsUsing(k).some((h) => h.name.toLowerCase().includes(q)),
+    );
+  });
+  async function forgetKnown(k: KnownHost) {
+    if ((await attempt(() => api.forgetKnownHost(k.host, k.port))) === undefined) return;
+    knownHosts = knownHosts?.filter((x) => x !== k) ?? null;
+    toast(`Forgot the key of ${k.host}:${k.port}. The next connection trusts the key it is shown.`);
+  }
+  async function copyFingerprint(k: KnownHost) {
+    await attempt(() => writeText(k.fingerprint).then(() => toast("Fingerprint copied.")));
+  }
 </script>
 
 <div class="settings">
@@ -132,6 +167,36 @@
           <Icon name="lock" size={14} /> Lock now
         </button>
       </div>
+    {:else if section === "knownHosts"}
+      <h1>Known hosts</h1>
+      <p class="muted known-intro">
+        The first connection to an SSH server saves its key. Later connections are refused if the key changes, which can
+        mean someone is intercepting the connection, or that the server was reinstalled. Forget a key only when you know
+        why it changed; the next connection then trusts the key it is shown.
+      </p>
+      {#if knownHosts === null}
+        <p class="muted">Loading…</p>
+      {:else if knownHosts.length === 0}
+        <p class="muted">No server keys saved yet. They are added when you first connect over SSH or SFTP.</p>
+      {:else}
+        <input id="known-filter" class="known-filter" type="search" bind:value={knownFilter} placeholder="Filter by address, host or fingerprint" />
+        <div class="known">
+          {#each shownKnownHosts as k (`${k.host}:${k.port}`)}
+            {@const used = hostsUsing(k)}
+            <div class="known-row">
+              <div class="known-main">
+                <div class="mono">{k.host}{k.port === 22 ? "" : `:${k.port}`}</div>
+                <small class="muted">{used.length ? used.map((h) => h.name).join(", ") : "No saved host uses this address"}</small>
+              </div>
+              <button class="mono fp" title="Copy fingerprint" onclick={() => copyFingerprint(k)}>{k.fingerprint}</button>
+              <button class="btn" onclick={() => forgetKnown(k)}><Icon name="trash" size={13} /> Forget</button>
+            </div>
+          {:else}
+            <p class="muted empty">No keys match.</p>
+          {/each}
+        </div>
+        <p class="muted count">{knownHosts.length} {knownHosts.length === 1 ? "key" : "keys"}</p>
+      {/if}
     {:else if section === "about"}
       <h1 class="sr-only">About</h1>
       <!-- The banner is the logo's own navy, so the artwork blends in; it stays dark in both themes. -->
@@ -273,6 +338,16 @@
   .check { display: flex; gap: 8px; align-items: center; cursor: pointer; }
   .check input { accent-color: var(--accent); }
   .link { color: var(--accent); padding: 0; text-align: left; text-decoration: underline; text-underline-offset: 2px; justify-self: start; }
+  .known-intro { max-width: 640px; }
+  .known-filter { max-width: 360px; }
+  .known { display: grid; border: 1px solid var(--line); border-radius: 8px; }
+  .known-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, auto) auto; gap: 12px; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  .known-row:last-child { border-bottom: 0; }
+  .known-main { display: grid; gap: 2px; min-width: 0; }
+  .known-main > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fp { font-size: 11.5px; color: var(--muted); padding: 2px 4px; border-radius: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; text-align: left; }
+  .fp:hover { background: var(--panel-2); color: var(--fg); }
+  .empty { padding: 10px; }
   .licenses { display: grid; border: 1px solid var(--line); border-radius: 8px; }
   .lic { border-bottom: 1px solid var(--line); min-width: 0; }
   .lic:last-child { border-bottom: 0; }

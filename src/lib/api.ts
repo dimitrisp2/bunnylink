@@ -82,6 +82,8 @@ export interface Settings {
   fillPasswordPrompts: boolean;
   autoUpdate: boolean;
 }
+/** An SSH server key trusted on first connection. */
+export interface KnownHost { host: string; port: number; fingerprint: string }
 /** A saved command. With no folders and no tags it applies to every host. */
 export interface Snippet {
   id: string;
@@ -187,6 +189,8 @@ export const api = {
   settings: () => invoke<Settings>("get_settings"),
   saveSettings: (settings: Settings) => invoke<void>("save_settings", { settings }),
   forgetHostKey: (hostId: string) => invoke<void>("forget_host_key", { hostId }),
+  knownHosts: () => invoke<KnownHost[]>("known_hosts"),
+  forgetKnownHost: (host: string, port: number) => invoke<void>("forget_known_host", { host, port }),
   copyCredential: (hostId: string, field: "username" | "password") =>
     invoke<void>("copy_credential", { hostId, field }),
 

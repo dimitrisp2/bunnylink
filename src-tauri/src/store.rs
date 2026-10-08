@@ -232,6 +232,12 @@ impl Store {
         )?;
         Ok(())
     }
+    pub fn known_hosts(&self) -> AppResult<Vec<KnownHost>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT host, port, fingerprint FROM known_hosts ORDER BY host, port")?;
+        let rows = stmt.query_map([], |r| Ok(KnownHost { host: r.get(0)?, port: r.get(1)?, fingerprint: r.get(2)? }))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
     pub fn forget_known_host(&self, host: &str, port: u16) -> AppResult<()> {
         self.conn().execute("DELETE FROM known_hosts WHERE host = ?1 AND port = ?2", params![host, port])?;
         Ok(())
@@ -316,6 +322,27 @@ mod tests {
         let eff = s.effective(&h).unwrap();
         assert_eq!(eff.username.as_deref(), Some("deploy"));
         assert_eq!(eff.username_from, None);
+    }
+
+    #[test]
+    fn known_hosts_list_and_forget() {
+        let s = Store::in_memory().unwrap();
+        s.save_known_host("b.example", 22, "SHA256:bbb").unwrap();
+        s.save_known_host("a.example", 2222, "SHA256:aaa").unwrap();
+        s.save_known_host("a.example", 22, "SHA256:old").unwrap();
+        s.save_known_host("a.example", 22, "SHA256:new").unwrap();
+        let listed: Vec<_> = s.known_hosts().unwrap().into_iter().map(|k| (k.host, k.port, k.fingerprint)).collect();
+        assert_eq!(
+            listed,
+            [
+                ("a.example".to_string(), 22, "SHA256:new".to_string()),
+                ("a.example".to_string(), 2222, "SHA256:aaa".to_string()),
+                ("b.example".to_string(), 22, "SHA256:bbb".to_string()),
+            ]
+        );
+        s.forget_known_host("a.example", 22).unwrap();
+        assert_eq!(s.known_hosts().unwrap().len(), 2);
+        assert_eq!(s.known_host("a.example", 2222).unwrap().as_deref(), Some("SHA256:aaa"));
     }
 
     #[test]

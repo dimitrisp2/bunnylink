@@ -384,6 +384,18 @@ fn save_settings(state: State<AppState>, settings: Settings) -> AppResult<()> {
 }
 
 #[tauri::command]
+fn known_hosts(state: State<AppState>) -> AppResult<Vec<KnownHost>> {
+    state.store.known_hosts()
+}
+
+/// Forgets one trusted server key by address and port (the Known hosts list).
+#[tauri::command]
+fn forget_known_host(state: State<AppState>, host: String, port: u16) -> AppResult<()> {
+    state.touch();
+    state.store.forget_known_host(&host, port)
+}
+
+#[tauri::command]
 fn forget_host_key(state: State<AppState>, host_id: String) -> AppResult<()> {
     let host = state.store.host(&host_id)?;
     let port = host
@@ -1217,6 +1229,8 @@ pub fn run() {
             get_settings,
             save_settings,
             forget_host_key,
+            known_hosts,
+            forget_known_host,
             copy_credential,
             import_preview,
             import_apply,
