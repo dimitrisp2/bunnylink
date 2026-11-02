@@ -1287,13 +1287,30 @@ struct DbLocations {
     portable: PathBuf,
 }
 
+/// The portable database's folder: the executable's, or for a macOS bundle
+/// (`X.app/Contents/MacOS/x`) the folder holding `X.app`, since writing inside the
+/// bundle breaks its signature and is lost when the app is replaced.
+fn portable_dir(exe: &Path) -> Option<PathBuf> {
+    let dir = exe.parent()?;
+    let bundle = dir
+        .parent()
+        .filter(|_| dir.file_name() == Some("MacOS".as_ref()))
+        .filter(|contents| contents.file_name() == Some("Contents".as_ref()))
+        .and_then(Path::parent)
+        .filter(|app| app.extension() == Some("app".as_ref()));
+    match bundle {
+        Some(app) => app.parent().map(Path::to_path_buf),
+        None => Some(dir.to_path_buf()),
+    }
+}
+
 /// Opens the existing database (next to the executable first), or on first run an
 /// in-memory store that `vault_create` saves once the user has chosen a location.
 fn open_store(app: &tauri::App) -> Result<(Store, PathBuf, Option<DbLocations>), Box<dyn std::error::Error>> {
     let exe = std::env::current_exe()?;
     let locations = DbLocations {
         app_data: app.path().app_data_dir()?,
-        portable: exe.parent().ok_or("The executable has no folder")?.to_path_buf(),
+        portable: portable_dir(&exe).ok_or("The executable has no folder")?,
     };
     for dir in [&locations.portable, &locations.app_data] {
         let path = dir.join(DB_FILE);
@@ -1397,6 +1414,15 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn portable_database_sits_next_to_a_macos_bundle() {
+        let dir = |exe: &str| portable_dir(Path::new(exe)).unwrap();
+        assert_eq!(dir("/Apps/BunnyLink.app/Contents/MacOS/bunnylink"), Path::new("/Apps"));
+        assert_eq!(dir("/tools/bunnylink/bunnylink"), Path::new("/tools/bunnylink"));
+        assert_eq!(dir("/x/Contents/MacOS/bunnylink"), Path::new("/x/Contents/MacOS"));
+        assert_eq!(dir("/x/Foo.app/MacOS/bunnylink"), Path::new("/x/Foo.app/MacOS"));
+    }
 
     #[test]
     fn key_files_are_checked_before_saving() {
