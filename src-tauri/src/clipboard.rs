@@ -24,6 +24,7 @@ pub fn copy_private(app: &AppHandle, text: &str) -> AppResult<()> {
     app.clipboard().write_text(text.to_string()).map_err(|e| AppError::Other(e.to_string()))
 }
 
+#[cfg(windows)]
 fn failed(what: &str) -> AppError {
     AppError::Other(format!("Could not copy to the clipboard ({what})."))
 }
